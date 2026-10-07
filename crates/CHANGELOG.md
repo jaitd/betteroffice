@@ -1,5 +1,27 @@
 # @betteroffice/rust-crates
 
+## 0.4.4
+
+### Patch Changes
+
+- 2586016: Worker-open editors build their editing copy from the worker's opened document instead of parsing the file a second time. The `yrs` entry adds `encodePeerMetadata`, `bootstrapPeer`, `PeerMetadataError` and `peerMetadataTags`.
+- 0650355: Footnote and endnote areas now take the height of the document's own separator, so pages with notes break where Word breaks them.
+- 42d185e: Documents open faster in the engine, with identical output. The Rust crates add `PackageBytes`, `RetainedPackage::from_bytes` and `*_bytes` parse entry points that take owned package bytes.
+- 2f97c01: Tall table rows now split at each cell's own line boundary at the page bottom, like Word, instead of moving whole to the next page when the cells' lines don't line up.
+- 11f68f2: Read-only sessions take each layout update from the worker as a compact summary instead of the full layout, which cuts main-thread work per update with identical rendering.
+- 01c8ecb: Large presentations show their first slide sooner and edit faster: thumbnails are laid out after the first paint, and unchanged slides keep their cached layouts and thumbnails, so typing and remote edits lay out only the slides they change.
+- d402284: Scatter and bubble chart X axes now fit charts whose X values are all equal, and X values without a Y value no longer stretch the X axis.
+- d920761: `openWorkbook` accepts a `calculation` option with a `WorkbookCalculationContext` (`nowSerial`, `randSeed`), and `WorkbookHandle.setCalculationContext` changes it, so date, time and random functions such as `RANDBETWEEN` compute the same values on every handle that shares the context.
+- 4d0cbda: Workbooks with charts repaint faster after edits that don't change a chart's data.
+- 2f7efc6: Single-cell edits apply directly instead of rebuilding the workbook's editing state, so cell edits on large workbooks are much faster, with identical results.
+- 11db7d8: Scrolling large workbooks repaints faster: the grid's row and column geometry is reused between frames until the workbook changes.
+- 355675f: Edited saves keep a formula cell's original markup, including shared formulas, when only its calculated result or style changes.
+- f2042f0: Improves preservation of original cell styles during edited saves, including protection and rotation, and keeps unrelated sheets unchanged.
+- 30bf7b2: Saving a workbook without edits now returns the original file unchanged, keeping its cached values and calculation chain.
+- 400ac5e: Workbooks open faster and with a lower peak memory, with identical results.
+- accc7a0: Saving an edited workbook is faster, with identical output.
+- d402284: Supported scatter and bubble charts now render instead of a placeholder.
+
 ## 0.4.3
 
 ### Patch Changes
