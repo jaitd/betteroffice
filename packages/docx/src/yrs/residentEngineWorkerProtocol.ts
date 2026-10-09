@@ -63,9 +63,10 @@ import type {
   DocxFindTextResult,
   DocxReadParagraphsRequest,
   DocxReadParagraphsResult,
+  DocxReadStoriesRequest,
   DocxReadStoriesResult,
 } from './edits';
-import type { DocxReadStorySelectionRequest, DocxStoryParts } from './stories';
+import type { DocxListStoriesResult } from './stories';
 import type {
   AnchorGeometryTarget,
   ProposalGeometryMirror,
@@ -118,8 +119,8 @@ export type ResidentDocumentRead =
   | { kind: 'resolveParagraphAnchors'; anchors: DocxParagraphAnchor[] }
   | { kind: 'readParagraphs'; request: DocxReadParagraphsRequest }
   | { kind: 'rawSelectionInfo'; selection: DocxCommandSelection }
-  | { kind: 'storyIds' }
-  | { kind: 'readStories'; request: DocxReadStorySelectionRequest; parts: DocxStoryParts }
+  | { kind: 'listStories' }
+  | { kind: 'readStories'; request: DocxReadStoriesRequest }
   | { kind: 'findText'; request: DocxFindTextRequest }
   | { kind: 'findMatches'; searchText: string; options: FindOptions; expectVersion: string }
   | { kind: 'searchText'; query: string; caseSensitive: boolean; carry?: YrsStickyPosition | null }
@@ -159,7 +160,7 @@ export interface ResidentDocumentReadValues {
   resolveParagraphAnchors: { results: DocxParagraphAnchorResult[] };
   readParagraphs: DocxReadParagraphsResult;
   rawSelectionInfo: YrsSelectionText;
-  storyIds: string[];
+  listStories: DocxListStoriesResult;
   readStories: DocxReadStoriesResult;
   findText: DocxFindTextResult;
   findMatches: DocxFindDisplayMatch[] | null;

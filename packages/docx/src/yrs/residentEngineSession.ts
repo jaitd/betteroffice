@@ -41,6 +41,7 @@ import type { YrsPositionOutline } from './yrsPositionProjection';
 import type { ResidentSaveRecord } from './residentSave';
 import type { Comment } from '../types/content';
 import type { Document } from '../types/document';
+import type { DocxListStoriesResult } from './stories';
 import { DirtyProjectionStories } from './dirtyProjectionStories';
 import { resolveHostJsonCommentMedia } from './hostMedia';
 import { createEditSession, preloadEditWasm, setEditWasmHeapLimit } from './wasm/index';
@@ -125,6 +126,7 @@ export type ResidentEngineSession = Pick<
   | 'setDisplayWindow'
   | 'setSelection'
   | 'readStories'
+  | 'listStories'
   | 'storiesChangedSince'
   | 'yrsBlocksForStory'
 > & {
@@ -573,6 +575,7 @@ export async function createResidentEngineSession(
       JSON.parse(session.paragraph_identities()) as DocxParagraphIdentitySnapshot,
     readStories: (request) =>
       JSON.parse(session.read_stories_json(JSON.stringify(request))) as DocxReadStoriesResult,
+    listStories: () => JSON.parse(session.list_stories_json()) as DocxListStoriesResult,
     exportStructuredWithPagesJson: (options, currentRequest) =>
       session.export_structured_with_pages_json(JSON.stringify(options), currentRequest),
     listContentControls: (options = {}) =>
