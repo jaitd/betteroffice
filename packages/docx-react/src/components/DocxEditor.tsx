@@ -1919,6 +1919,7 @@ const LegacyDocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Leg
     commands: commandController,
     viewerSelection: viewerSession,
     session: pluginHostSession,
+    document: history.state,
     loadGeneration: yrsSeedGeneration,
     queries: canvasRenderer.queries,
     viewerDocumentRead: viewerReads ? canvasRenderer.readWorkerDocument : undefined,
