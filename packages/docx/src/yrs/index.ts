@@ -155,7 +155,7 @@ export {
   type DocxSavedParagraph,
   type DocxSessionSave,
 } from './saveYrsDocx';
-export { headerFooterStory, sessionSourcePackage } from './sessionInternals';
+export { headerFooterDisplayRIds, headerFooterStory, sessionSourcePackage } from './sessionInternals';
 export { PeerMetadataError, peerMetadataTags } from './peerMetadata';
 export {
   DirtyProjectionStories,

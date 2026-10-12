@@ -40,6 +40,7 @@ export function headerFooterStory(session: object | null | undefined, rId: strin
   return `hf:${canonical || rId}`;
 }
 
+/** The relationship ids whose bands show `rId`'s story. @internal */
 export function headerFooterDisplayRIds(session: object, rId: string): string[] {
   const aliases = registry.get(session)?.headerFooterAliases();
   const canonical = aliases?.get(rId) ?? rId;
