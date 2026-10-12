@@ -303,19 +303,17 @@ export function createPluginGeometry(
     };
   };
   /**
-   * Places a target in the header or footer story `root`, which repeats on every page whose band
-   * shows it: under any relationship routed to that story. Unbuilt pages outside the display
-   * window are left out; the anchor sits on the first built page that paints it, else on the
-   * first unbuilt one.
+   * Places a target in a header or footer story, which repeats on every page whose band shows it
+   * under one of `routed` relationship ids. Unbuilt pages outside the display window are left out;
+   * the anchor sits on the first built page that paints it, else on the first unbuilt one.
    */
   const placeRepeated = (
-    session: YrsSession,
-    root: string,
+    routed: readonly string[],
     ranges: Interval[],
     hidden: readonly Interval[],
     paragraph: number | null
   ): DocxAnchorGeometryResult => {
-    const rIds = new Set(headerFooterDisplayRIds(session, root.slice('hf:'.length)));
+    const rIds = new Set(routed);
     const pages = queries.displayList?.pages ?? [];
     const bands = pages.flatMap(({ header, footer, hfParts, unbuilt }, pageIndex) => {
       for (const [region, rId] of [
@@ -327,7 +325,7 @@ export function createPluginGeometry(
       return [];
     });
     if (!bands.length) {
-      return complete() && !pages.some(({ unbuilt }) => unbuilt)
+      return complete()
         ? anchorFailure('missing-target', 'No page paints this header or footer')
         : anchorFailure('layout-unavailable', 'No laid-out page paints this header or footer');
     }
@@ -362,8 +360,15 @@ export function createPluginGeometry(
         );
     if (end) return respond(drawn, { ...end, width: 0 });
     const unbuilt = bands.find((band) => band.unbuilt);
-    const bounds = unbuilt && queries.pageBounds(unbuilt.pageIndex);
-    return respond(drawn, bounds ? { ...bounds, pageIndex: unbuilt.pageIndex, width: 0, height: 0 } : null);
+    if (!unbuilt) return respond(drawn, null);
+    const content = pages[unbuilt.pageIndex]?.contentBounds;
+    return respond(drawn, {
+      pageIndex: unbuilt.pageIndex,
+      x: content?.x ?? 0,
+      y: (content?.y ?? 0) + (unbuilt.region === 'footer' ? (content?.height ?? 0) : 0),
+      width: 0,
+      height: 0,
+    });
   };
   return {
     layout,
@@ -429,8 +434,9 @@ export function createPluginGeometry(
           : mirrored;
       if (repeated && !repeated.ok) return repeated;
       if (repeated?.root) {
-        const { ranges, hidden = [], paragraph } = repeated;
-        return placeRepeated(session, repeated.root, [...ranges], hidden, paragraph);
+        const { root: story, rIds, ranges, hidden = [], paragraph } = repeated;
+        const routed = rIds ?? headerFooterDisplayRIds(session, story.slice('hf:'.length));
+        return placeRepeated(routed, [...ranges], hidden, paragraph);
       }
       const window = displayWindowOf(queries)?.read();
       const display = (range: RawAnchorRange): Interval | null => {

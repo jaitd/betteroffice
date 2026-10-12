@@ -24,11 +24,11 @@ import {
   createResidentEngineSession,
   type ResidentEngineSession,
 } from '@betteroffice/docx/yrs/residentEngineSession';
-import { registerSessionInternals, sessionInternals } from '@betteroffice/docx/yrs/sessionInternals';
+import { sessionInternals } from '@betteroffice/docx/yrs/sessionInternals';
 import { preloadEditWasm } from '@betteroffice/docx/wasm/edit';
 import { markPresented, stampRevisionPreviewKey } from '../components/DocxEditor/internals/layoutProvenance';
 import { bindDisplayWindow } from '../components/DocxEditor/internals/displayWindow';
-import { sectionedDocx, storyAnchorsDocx } from './__fixtures__/storyAnchorsDocx';
+import { sectionedDocx, sharedHeaderDocx, storyAnchorsDocx } from './__fixtures__/storyAnchorsDocx';
 import { createPluginGeometry } from './geometry';
 import type { DocxAnchorGeometryResult, DocxGeometryTarget } from './types';
 
@@ -68,13 +68,15 @@ async function laidOut(
   first = 0,
   end = 2 ** 32 - 1,
   window?: [number, number],
-  fixture: () => Promise<Uint8Array> = storyAnchorsDocx
+  fixture: () => Promise<Uint8Array> = storyAnchorsDocx,
+  prepare: (main: YrsSession) => void = () => {}
 ): Promise<LaidOut> {
   const bytes = await fixture();
   const main = await createYrsSession();
   const engine = await createResidentEngineSession();
   destroy.push(main, engine);
   const host = main.openDocx(bytes, true);
+  prepare(main);
   const request = buildResidentRegionLayoutRequest(host.document, PAGE_GAP, {});
   const requirements = JSON.parse(main.layoutFontRequirementsJson(JSON.stringify(request))) as Array<{
     key: string;
@@ -260,6 +262,13 @@ describe('header and footer targets', () => {
     const [first, second] = odd.rects;
     expect(second!.x).toBe(first!.x);
     expect(second!.y - first!.y).toBeCloseTo(2 * (laid.queries.pageSize(2)!.height + PAGE_GAP));
+    expect(
+      both(laid, {
+        kind: 'search',
+        paragraph: sessionParagraph(laid, 'hf:rIdH1', '10000001').paragraph,
+        text: '{{odd}}',
+      }).rects
+    ).toEqual(odd.rects);
     const cell = both(laid, range(laid, 'hf:rIdH1:t0:r0c0', '10000002', '{{hcell}}'));
     expect(pageIndices(cell)).toEqual([2, 4]);
     expect(cell.rects[0]!.y).toBeGreaterThan(first!.y);
@@ -268,6 +277,12 @@ describe('header and footer targets', () => {
   test('an even header paints on even pages and a first-page footer only on the first', async () => {
     const laid = await laidOut();
     expect(pageIndices(both(laid, sessionParagraph(laid, 'hf:rIdH2', '10000011')))).toEqual([1, 3, 5]);
+    const revision = laid.main.listRevisions().find(({ story }) => story === 'hf:rIdH2')!;
+    const deleted = both(laid, { kind: 'revision', revisionId: revision.revisionId });
+    expect(pageIndices(deleted)).toEqual([1, 3, 5]);
+    expect(deleted.rects[0]!.x).toBeGreaterThan(
+      both(laid, sessionParagraph(laid, 'hf:rIdH2', '10000012')).rects[0]!.x
+    );
     const footer = both(laid, range(laid, 'hf:rIdF1', '10000021', '{{first}}'));
     expect(pageIndices(footer)).toEqual([0]);
     expect(footer.anchor.y).toBeGreaterThan(500);
@@ -354,22 +369,29 @@ describe('header and footer targets', () => {
   });
 
   test('a shared story is placed under every relationship routed to it', async () => {
-    const laid = await laidOut();
-    const internals = sessionInternals(laid.main);
-    registerSessionInternals(laid.main, {
-      ...internals,
-      headerFooterAliases: () => new Map([['rIdH2', 'rIdH1']]),
+    const laid = await laidOut(0, 2 ** 32 - 1, undefined, sharedHeaderDocx, (main) => {
+      for (const story of main.storyIds()) {
+        if (story === 'hf:rIdS2' || story.startsWith('hf:rIdS2:')) main.deleteStory(story);
+      }
+      sessionInternals(main).setHeaderFooterAliases(
+        JSON.stringify([{ isHeader: true, partPath: 'word/rIdS1.xml', relationshipIds: ['rIdS1', 'rIdS2'] }])
+      );
     });
-    const shared = ok(geometryOf(laid, false)(range(laid, 'hf:rIdH1', '10000001', '{{odd}}')));
-    expect(pageIndices(shared)).toEqual([1, 2, 3, 4, 5]);
-    expect(shared.anchor.pageIndex).toBe(1);
+    expect(laid.queries.displayList!.pages.map(({ header }) => header?.rId)).toEqual(['rIdS1', 'rIdS2']);
+    const shared = both(laid, range(laid, 'hf:rIdS1', '10005001', '{{shared}}'));
+    expect(pageIndices(shared)).toEqual([0, 1]);
+    expect(shared.anchor.pageIndex).toBe(0);
   });
 
-  test('a part no page paints is missing once the layout is complete', async () => {
-    const laid = await laidOut();
+  test('a part no page paints is missing once the layout is complete, unbuilt pages included', async () => {
+    const laid = await laidOut(0, 3);
     const target = range(laid, 'hf:rIdF1', '10000021', '{{first}}');
     const pages = laid.queries.displayList!.pages;
-    for (const page of pages) delete page.footer;
+    expect(pages.some(({ unbuilt }) => unbuilt)).toBe(true);
+    for (const page of pages) {
+      delete page.footer;
+      if (page.hfParts) delete page.hfParts.footer;
+    }
     for (const worker of [false, true]) {
       expect(geometryOf(laid, worker, true)(target)).toEqual({
         ok: false,

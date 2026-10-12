@@ -33,7 +33,8 @@ function part(root: 'hdr' | 'ftr', content: string): string {
 /**
  * Six pages under `titlePg` and `evenAndOddHeaders`: page 1 paints only the first-page footer
  * `rIdF1`, odd pages the default header `rIdH1` (with a table cell), even pages the even header
- * `rIdH2`. Body table 0 holds `{{cell}}` in `body:t0:r0c0`; table 1's single row splits across
+ * `rIdH2`, which holds a tracked deletion. Body table 0 holds `{{cell}}` in `body:t0:r0c0`; table 1's
+ * single row splits across
  * pages 2 and 3.
  */
 export async function storyAnchorsDocx(): Promise<Uint8Array> {
@@ -58,7 +59,12 @@ export async function storyAnchorsDocx(): Promise<Uint8Array> {
         table([paragraph('10000002', 'Header {{hcell}}')]) +
         paragraph('10000003', ''),
     ],
-    rIdH2: ['header', paragraph('10000011', 'Even {{even}} header')],
+    rIdH2: [
+      'header',
+      paragraph('10000011', 'Even {{even}} header') +
+        `<w:p w14:paraId="10000012"><w:r>${font}<w:t xml:space="preserve">Kept </w:t></w:r>` +
+        `<w:del w:id="7" w:author="Reviewer"><w:r>${font}<w:delText>gone</w:delText></w:r></w:del></w:p>`,
+    ],
     rIdF1: ['footer', paragraph('10000021', 'First {{first}} footer')],
   });
 }
@@ -92,8 +98,32 @@ export async function sectionedDocx(): Promise<Uint8Array> {
   );
 }
 
-/** A package with `evenAndOddHeaders`, `body` and one part per relationship id. */
-async function packaged(body: string, parts: Record<string, ['header' | 'footer', string]>) {
+/**
+ * Two one-page sections whose default headers are relationships `rIdS1` and `rIdS2` to one part,
+ * holding `{{shared}}` in paragraph `10005001`.
+ */
+export async function sharedHeaderDocx(): Promise<Uint8Array> {
+  const body =
+    `<w:p w14:paraId="00000001"><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdS1"/>${PAGE}</w:sectPr></w:pPr>` +
+    `<w:r>${font}<w:t>One</w:t></w:r></w:p>` +
+    paragraph('00000002', 'Two') +
+    `<w:sectPr><w:headerReference w:type="default" r:id="rIdS2"/>${PAGE}</w:sectPr>`;
+  return packaged(
+    body,
+    { rIdS1: ['header', paragraph('10005001', 'Shared {{shared}} header')] },
+    { evenAndOdd: false, shared: { rIdS2: 'rIdS1' } }
+  );
+}
+
+/**
+ * A package with `body` and one part per relationship id, under `evenAndOddHeaders` unless
+ * `evenAndOdd` is false; each `shared` relationship id targets another's part.
+ */
+async function packaged(
+  body: string,
+  parts: Record<string, ['header' | 'footer', string]>,
+  { evenAndOdd = true, shared = {} }: { evenAndOdd?: boolean; shared?: Record<string, string> } = {}
+) {
   const entries = Object.entries(parts);
   const zip = new JSZip();
   zip.file(
@@ -121,9 +151,15 @@ async function packaged(body: string, parts: Record<string, ['header' | 'footer'
       entries
         .map(([rId, [kind]]) => `<Relationship Id="${rId}" Type="${R}/${kind}" Target="${rId}.xml"/>`)
         .join('') +
+      Object.entries(shared)
+        .map(([rId, owner]) => `<Relationship Id="${rId}" Type="${R}/${parts[owner]![0]}" Target="${owner}.xml"/>`)
+        .join('') +
       '</Relationships>'
   );
-  zip.file('word/settings.xml', `<w:settings xmlns:w="${W}"><w:evenAndOddHeaders/></w:settings>`);
+  zip.file(
+    'word/settings.xml',
+    `<w:settings xmlns:w="${W}">${evenAndOdd ? '<w:evenAndOddHeaders/>' : ''}</w:settings>`
+  );
   for (const [rId, [kind, content]] of entries) {
     zip.file(`word/${rId}.xml`, part(kind === 'header' ? 'hdr' : 'ftr', content));
   }
