@@ -1,4 +1,6 @@
-use docx_edit::{CellLoc, EditCtx, EditingDoc, Position, StoryInfoKind, TableRange, seed_from_docx};
+use docx_edit::{
+    CellLoc, EditCtx, EditingDoc, Position, StoryInfoKind, TableRange, seed_from_docx,
+};
 
 #[path = "support/header_footer_alias_fixture.rs"]
 mod fixture;
@@ -77,10 +79,7 @@ fn a_nested_table_moved_by_a_cell_merge_names_the_cell_that_holds_it() {
         .unwrap();
     doc.merge_cells(
         &ctx,
-        &TableRange::new(
-            CellLoc::new("body", 0, 0, 0),
-            CellLoc::new("body", 0, 0, 1),
-        ),
+        &TableRange::new(CellLoc::new("body", 0, 0, 0), CellLoc::new("body", 0, 0, 1)),
     )
     .unwrap();
     let listed = doc.list_stories();
