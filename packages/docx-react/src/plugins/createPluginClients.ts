@@ -203,12 +203,18 @@ export function createPluginClients(
   ): Promise<T | DocxPluginRefusal> => {
     const session = access.pagedEditorRef.current?.getYrsSession();
     const authority = session ? workerProposalAuthority(session) : null;
-    if (!session || !authority) return whenFlushed(local);
+    const held = session ? workerOpenDocumentHeld(session) : false;
+    if (!session || (!authority && !held)) return whenFlushed(local);
     const before = invalid(session);
     if (before) return before;
+    if (!authority) return pluginRefusal('input-failed');
     let fallbackRefusal: DocxPluginRefusal | null = null;
     try {
       const result = await worker(authority, async () => {
+        if (held) {
+          fallbackRefusal = pluginRefusal('input-failed');
+          throw fallbackRefusal;
+        }
         const result = await whenFlushed(local);
         if ('version' in result) return result;
         fallbackRefusal = result;

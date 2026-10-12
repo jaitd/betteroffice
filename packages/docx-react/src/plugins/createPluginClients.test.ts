@@ -1539,6 +1539,39 @@ describe('plugin read and navigation clients', () => {
 describe('plugin story reads', () => {
   const headers = { stories: ['header', 'content-control'], view: 'accepted' } as const;
 
+  for (const workerFallback of [false, true]) {
+    test.each(['readParagraphs', 'listStories', 'readStories'] as const)(
+      `%s refuses a held document ${workerFallback ? 'when a worker read falls back' : 'without a worker authority'}`,
+      async (method) => {
+        const env = await setup();
+        const worker = routeWorker(env);
+        if (workerFallback) worker.read.mockImplementation((request, main) => main(request));
+        else worker.routing.mockReturnValue(null);
+        env.state.viewer = true;
+        const release = mock(() => { throw new Error('unexpected viewer release'); });
+        workerOpenReplica.holdWorkerOpenDocument(env.session, release);
+        const localReads = [
+          spyOn(env.session, 'readParagraphs'),
+          spyOn(env.session, 'listStories'),
+          spyOn(env.session, 'readStories'),
+        ];
+        restoreWorkers.push(() => {
+          for (const read of localReads) read.mockRestore();
+        });
+        const result = method === 'listStories'
+          ? env.clients.read.listStories()
+          : method === 'readStories'
+            ? env.clients.read.readStories(headers)
+            : env.clients.read.readParagraphs({ view: 'accepted' });
+        expect(await result).toMatchObject({ ok: false, failure: { code: 'input-failed' } });
+        for (const read of localReads) expect(read).not.toHaveBeenCalled();
+        expect(worker.flush).not.toHaveBeenCalled();
+        expect(worker.replica).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+      }
+    );
+  }
+
   test('list and read stories from the session after flushing input', async () => {
     const env = await setup();
     expect(await env.clients.read.listStories()).toEqual(env.session.listStories());
