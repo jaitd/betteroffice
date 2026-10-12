@@ -355,6 +355,7 @@ export function createPluginGeometry(
       : firstOf(
           [...built.values()].flatMap(({ region, rId }) => [
             ...(gap ? queries.hfCaretRects(region, rId, gap.from) : []),
+            ...(gap ? queries.hfCaretRects(region, rId, gap.to) : []),
             ...(paragraph === null ? [] : queries.hfAnchorRects(region, rId, paragraph)),
           ])
         );

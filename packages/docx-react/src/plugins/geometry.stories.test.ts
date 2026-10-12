@@ -17,6 +17,7 @@ import {
   computeProposalGeometryMirror,
   createYrsPositionProjection,
   createYrsSession,
+  proposalRevisionPreview,
   type DocxProposalSnapshot,
   type YrsSession,
 } from '@betteroffice/docx/yrs';
@@ -29,7 +30,9 @@ import { preloadEditWasm } from '@betteroffice/docx/wasm/edit';
 import { markPresented, stampRevisionPreviewKey } from '../components/DocxEditor/internals/layoutProvenance';
 import { bindDisplayWindow } from '../components/DocxEditor/internals/displayWindow';
 import { sectionedDocx, sharedHeaderDocx, storyAnchorsDocx } from './__fixtures__/storyAnchorsDocx';
+import { hiddenRanges } from './anchorGeometry';
 import { createPluginGeometry } from './geometry';
+import { currentPreviewKey } from './proposalPreview';
 import type { DocxAnchorGeometryResult, DocxGeometryTarget } from './types';
 
 const ownsDom = !GlobalRegistrator.isRegistered;
@@ -77,7 +80,9 @@ async function laidOut(
   destroy.push(main, engine);
   const host = main.openDocx(bytes, true);
   prepare(main);
-  const request = buildResidentRegionLayoutRequest(host.document, PAGE_GAP, {});
+  const request = buildResidentRegionLayoutRequest(host.document, PAGE_GAP, {
+    revisionPreview: proposalRevisionPreview(main.getProposals()),
+  });
   const requirements = JSON.parse(main.layoutFontRequirementsJson(JSON.stringify(request))) as Array<{
     key: string;
   }>;
@@ -130,17 +135,17 @@ function geometryOf({ main, engine, queries }: LaidOut, worker: boolean, complet
   const layer = document.createElement('div');
   layer.getBoundingClientRect = () => pages.getBoundingClientRect();
   markPresented(pages, queries.displayList);
-  stampRevisionPreviewKey(queries, '');
+  stampRevisionPreviewKey(queries, currentPreviewKey(main));
   const projection = createYrsPositionProjection(main, 'body');
   const reader = engine.geometryReader;
-  const snapshot: DocxProposalSnapshot = { version: reader.version(), previewVersion: 0, proposals: [] };
+  const snapshot: DocxProposalSnapshot = { ...main.getProposals(), version: reader.version() };
   const mirror = computeProposalGeometryMirror(reader, snapshot);
   const stub = { version: () => mirror.version, getProposals: () => snapshot } as unknown as YrsSession;
   const geometry = createPluginGeometry(
     {
       id: 'layout',
       version: worker ? mirror.version : main.version(),
-      previewVersion: 0,
+      previewVersion: snapshot.previewVersion,
       zoom: 1,
       pageCount: queries.pageCount(),
     },
@@ -155,7 +160,8 @@ function geometryOf({ main, engine, queries }: LaidOut, worker: boolean, complet
             session: stub,
             presented: true,
             proposalGeometry: mirror,
-            anchorTarget: (target) => computeAnchorTargetGeometry(reader, [target])[0],
+            anchorTarget: (target) =>
+              computeAnchorTargetGeometry(reader, [target], () => hiddenRanges(main, main.version()))[0],
             editor: {
               hasPendingInput: () => false,
               yrsLocToDisplayPosition: () => {
@@ -216,9 +222,9 @@ const pageIndices = (result: DocxAnchorGeometryResult) => [
 ];
 
 /** The main thread and worker mode answer alike. */
-function both(laid: LaidOut, target: DocxGeometryTarget) {
-  const main = ok(geometryOf(laid, false)(target));
-  expect(ok(geometryOf(laid, true)(target))).toEqual({ ...main, version: laid.engine.geometryReader.version() });
+function both(laid: LaidOut, target: DocxGeometryTarget, complete = false) {
+  const main = ok(geometryOf(laid, false, complete)(target));
+  expect(ok(geometryOf(laid, true, complete)(target))).toEqual({ ...main, version: laid.engine.geometryReader.version() });
   return main;
 }
 
@@ -293,6 +299,46 @@ describe('header and footer targets', () => {
     const empty = both(laid, sessionParagraph(laid, 'hf:rIdH1', '10000003'));
     expect(empty.rects).toEqual([]);
     expect(empty.anchor.pageIndex).toBe(2);
+  });
+
+  test('a hidden leading header deletion anchors before the first visible character on its first painting page', async () => {
+    const laid = await laidOut(0, 2 ** 32 - 1, undefined, storyAnchorsDocx, (main) => {
+      const proposed = main.proposeChanges({
+        expectVersion: main.version(),
+        proposals: [
+          {
+            id: 'header-deletion',
+            paragraph: {
+              kind: 'session',
+              sessionId: main.paragraphIdentities().sessionId,
+              story: 'hf:rIdH1',
+              paraId: '10000001',
+            },
+            suggest: { author: 'Reviewer', date: '2026-10-01T00:00:00Z' },
+            op: 'replaceText',
+            search: 'Odd ',
+            replaceWith: '',
+          },
+        ],
+      });
+      if (!proposed.ok) throw new Error(proposed.failure.message);
+      const accepted = main.setProposalStates({
+        expectVersion: main.version(),
+        expectPreviewVersion: proposed.snapshot.previewVersion,
+        changes: [{ id: 'header-deletion', state: 'accepted' }],
+      });
+      if (!accepted.ok) throw new Error(accepted.failure.message);
+    });
+    expect(laid.queries.displayList!.pages.some(({ unbuilt }) => unbuilt)).toBe(false);
+    const firstCharacter = both(laid, span(laid, 'hf:rIdH1', ['10000001', 0], ['10000001', 1]), true);
+    expect(pageIndices(firstCharacter)).toEqual([2, 4]);
+    const hidden = both(
+      laid,
+      { kind: 'revision', revisionId: laid.main.getProposals().proposals[0]!.revisionIds[0]! },
+      true
+    );
+    expect(hidden.rects).toEqual([]);
+    expect(hidden.anchor).toEqual({ ...firstCharacter.rects[0]!, width: 0 });
   });
 
   test('pages outside the display window that are not built yet are left out', async () => {
