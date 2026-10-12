@@ -596,7 +596,10 @@ describe('header and footer anchor targets', () => {
     const resident = await createResidentEngineSession();
     try {
       main.openDocx(headerFixture(), true);
-      resident.loadState(main.encodeState());
+      resident.openDocx(headerFixture());
+      const persisted = main.paragraphIdentities().paragraphs.find(
+        ({ ooxmlParaId }) => ooxmlParaId === '0000E001'
+      )!.persisted!;
       const preview = Object.fromEntries(
         main.listRevisions().map(({ revisionId }) => [revisionId, 'accepted' as const])
       );
@@ -606,16 +609,22 @@ describe('header and footer anchor targets', () => {
           version,
           range: { story, start: { paraId, offset: 0 }, end: { paraId, offset: end }, view: 'accepted' },
         }) as const;
-      const targets = (version: string) => [
-        range(version, 'hf:rIdH', '0000E001', 8),
-        range(version, 'hf:rIdH:t0:r0c0', '0000E002', 4),
-        range(version, 'body', '00000001', 4),
-        range(version, 'fn:1', '0000E001', 1),
-      ];
+      const targets = (reader: typeof main | typeof resident.geometryReader) => {
+        const version = reader.version();
+        const revision = reader.listRevisions().find(({ story }) => story === 'hf:rIdH')!;
+        return [
+          range(version, 'hf:rIdH', '0000E001', 8),
+          range(version, 'hf:rIdH:t0:r0c0', '0000E002', 4),
+          range(version, 'body', '00000001', 4),
+          range(version, 'fn:1', '0000E001', 1),
+          { kind: 'search', paragraph: persisted, text: 'tail' },
+          { kind: 'revision', revisionId: revision.revisionId },
+        ] as const;
+      };
       const hidden = (reader: typeof main | typeof resident.geometryReader) => () =>
         hiddenRangesForPreview(reader, reader.version(), preview);
-      const answers = computeAnchorTargetGeometry(main, targets(main.version()), hidden(main));
-      const [header, cell, body, note] = answers;
+      const answers = computeAnchorTargetGeometry(main, targets(main), hidden(main));
+      const [header, cell, body, note, search, revision] = answers;
       expect(header).toEqual({
         ok: true,
         root: 'hf:rIdH',
@@ -628,26 +637,27 @@ describe('header and footer anchor targets', () => {
       expect(cell.ranges[0]!.from).toBeGreaterThan(13);
       expect(body).toEqual({ ok: true, ranges: [{ from: 1, to: 5 }], paragraph: 1 });
       expect(note).toMatchObject({ ok: false, failure: { code: 'unsupported' } });
-      expect(
-        computeAnchorTargetGeometry(
-          resident.geometryReader,
-          targets(resident.geometryReader.version()),
-          hidden(resident.geometryReader)
-        )
-      ).toEqual(answers);
-      const persisted = resolveAnchorTarget(
-        main,
-        {
-          kind: 'paragraph',
-          paragraph: {
-            kind: 'persisted',
-            story: { partUri: '/word/header1.xml', kind: 'header' },
-            paraId: '0000E001',
-          },
-        },
-        main.version()
+      expect(search).toMatchObject({ ok: true, root: 'hf:rIdH', ranges: [{ from: 9, to: 13 }] });
+      expect(revision).toMatchObject({ ok: true, root: 'hf:rIdH', ranges: [{ from: 5, to: 9 }] });
+      const residentAnswers = computeAnchorTargetGeometry(
+        resident.geometryReader,
+        targets(resident.geometryReader),
+        hidden(resident.geometryReader)
       );
-      expect(persisted).toMatchObject({ ok: true, paragraph: { story: 'hf:rIdH' } });
+      expect(residentAnswers.map((answer) => answer.ok && answer.rIds)).toEqual([
+        ['rIdH'], ['rIdH'], undefined, false, ['rIdH'], ['rIdH'],
+      ]);
+      expect(
+        residentAnswers.map((answer) => {
+          if (!answer.ok) return answer;
+          const { rIds: _, ...rest } = answer;
+          return rest;
+        })
+      ).toEqual(answers);
+      expect(resolveAnchorTarget(main, { kind: 'paragraph', paragraph: persisted }, main.version())).toMatchObject({
+        ok: true,
+        paragraph: { story: 'hf:rIdH' },
+      });
     } finally {
       resident.destroy();
       main.destroy();

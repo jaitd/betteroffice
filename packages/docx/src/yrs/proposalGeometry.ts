@@ -10,6 +10,7 @@ import {
   type YrsLocProjection,
   type YrsPositionOutline,
 } from './yrsPositionProjection';
+import { routedHeaderFooterRIds } from './sessionInternals';
 import { createYrsInputPositionMap, type YrsInputPositionMap } from './inputPositionMap';
 
 /** @internal */
@@ -46,6 +47,8 @@ export type ProposalGeometryReader = AnchorReader &
   > & {
     proposalRevisions?(ids: readonly string[]): readonly ProposalGeometryRevision[];
     positionOutline?(root: string): YrsPositionOutline | null;
+    /** Header and footer alias relationship ids, each mapped to its canonical one. */
+    headerFooterAliases?(): ReadonlyMap<string, string>;
   };
 
 /** @internal */
@@ -452,6 +455,8 @@ export interface ProposalDisplayTarget {
   root?: string;
   /** With `root`, that story's hidden ranges. */
   hidden?: { from: number; to: number }[];
+  /** With `root`, the relationship ids whose bands show it, when the reader knows its aliases. */
+  rIds?: string[];
 }
 
 /** @internal */
@@ -608,7 +613,10 @@ export function resolvedTargetGeometry(
     entry.hidden ??= hidden()
       .map(display)
       .filter((range): range is { from: number; to: number } => range !== null);
-    return { ...mapped, root, hidden: entry.hidden };
+    const rIds = reader.headerFooterAliases
+      ? routedHeaderFooterRIds(reader.headerFooterAliases(), root.slice('hf:'.length))
+      : undefined;
+    return { ...mapped, root, hidden: entry.hidden, ...(rIds ? { rIds } : {}) };
   };
 }
 
