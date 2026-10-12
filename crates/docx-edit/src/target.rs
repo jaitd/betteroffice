@@ -1338,21 +1338,22 @@ impl EditingDoc {
             let before = budget;
             match read_story(&mut views, &story, None, request.view, &mut budget) {
                 Ok(paragraphs) => stories.push(StoryText::Read { story, paragraphs }),
-                Err(failure)
-                    if failure.code == EditFailureCode::LimitExceeded
-                        && read_story(
+                Err(mut failure) => {
+                    if failure.code == EditFailureCode::LimitExceeded {
+                        match read_story(
                             &mut views,
                             &story,
                             None,
                             request.view,
                             &mut ReadBudget::limited(before.max_paragraphs, before.max_text_units),
-                        )
-                        .is_ok() =>
-                {
-                    truncated = true;
-                    break;
-                }
-                Err(failure) => {
+                        ) {
+                            Ok(_) => {
+                                truncated = true;
+                                break;
+                            }
+                            Err(retried) => failure = retried,
+                        }
+                    }
                     budget = before;
                     stories.push(StoryText::Refused { story, failure });
                 }
@@ -1684,6 +1685,58 @@ mod tests {
         assert_eq!(read(2, 2), (all[..4].to_vec(), true));
         assert_eq!(read(1, 2), (all[..2].to_vec(), true));
         assert_eq!(read(2, 1), (all[..2].to_vec(), true));
+    }
+
+    #[test]
+    fn read_stories_report_the_full_budget_refusal_and_continue() {
+        let doc = EditingDoc::new(100);
+        for (story, text) in [("a", "aa"), ("b", "bbx"), ("c", "c")] {
+            doc.create_story(story, text, "Normal", "left").unwrap();
+        }
+        let ctx = crate::EditCtx::local("", "");
+        doc.split_paragraph(
+            &ctx,
+            Position {
+                story: "b".to_owned(),
+                index: 2,
+            },
+            None,
+        )
+        .unwrap();
+        doc.apply_raw_ops(
+            "b",
+            vec![RawOp::SetEmbedAttr {
+                index: 4,
+                key: PPR_INS.to_owned(),
+                value: Any::from("rev"),
+            }],
+            &ctx,
+        )
+        .unwrap();
+        let request = ReadStoriesRequest {
+            stories: None,
+            by_root: false,
+            view: EditTextView::Accepted,
+            expect_version: None,
+        };
+        let read = doc
+            .read_stories_within(&request, ReadBudget::limited(4, 3))
+            .unwrap();
+        assert!(!read.truncated);
+        assert_eq!(read.stories.len(), 3);
+        assert!(matches!(
+            &read.stories[0],
+            StoryText::Read { story, paragraphs } if story == "a" && paragraphs[0].text == "aa"
+        ));
+        assert!(matches!(
+            &read.stories[1],
+            StoryText::Refused { story, failure }
+                if story == "b" && failure.code == EditFailureCode::Unsupported
+        ));
+        assert!(matches!(
+            &read.stories[2],
+            StoryText::Read { story, paragraphs } if story == "c" && paragraphs[0].text == "c"
+        ));
     }
 
     fn texts(story: &StoryView) -> Vec<&str> {
