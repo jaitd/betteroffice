@@ -5,7 +5,6 @@ use yrs::{Map, ReadTxn, Transact};
 
 use crate::EditingDoc;
 use crate::batch::DocumentVersion;
-use crate::structured::source::{cell_table, story_root};
 use crate::structured::{StoryKind, StoryUse, header_footer_index};
 use crate::target::Views;
 
@@ -80,18 +79,6 @@ pub enum AllStories {
     All,
 }
 
-fn nesting(story: &str) -> Option<(&str, StoryInfoKind)> {
-    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
-    if let Some(table) = cell_table(story)
-        && let Some(cut) = table.rfind(":t")
-        && digits(&table[cut + 2..])
-    {
-        return Some((&table[..cut], StoryInfoKind::TableCell));
-    }
-    let cut = story.rfind(":sdt")?;
-    digits(&story[cut + 4..]).then(|| (&story[..cut], StoryInfoKind::ContentControl))
-}
-
 /// Every story of `views`, sorted by id.
 pub(crate) fn story_infos<T: ReadTxn>(views: &mut Views<'_, T>) -> Vec<StoryInfo> {
     let txn = views.txn();
@@ -101,20 +88,36 @@ pub(crate) fn story_infos<T: ReadTxn>(views: &mut Views<'_, T>) -> Vec<StoryInfo
         .unwrap_or_default();
     ids.sort();
     let index = header_footer_index(views);
+    let ownership = views.ownership();
     ids.into_iter()
         .map(|story| {
-            let root = story_root(&story).to_owned();
-            if let Some((parent, kind)) = nesting(&story) {
-                let parent = Some(parent.to_owned());
+            let nested = ownership.owner(&story).map(|owner| {
+                let mut root = owner.parent.as_str();
+                let mut seen = HashSet::from([story.as_str()]);
+                while let Some(up) = ownership.owner(root) {
+                    if !seen.insert(root) {
+                        break;
+                    }
+                    root = up.parent.as_str();
+                }
+                let kind = if owner.cell {
+                    StoryInfoKind::TableCell
+                } else {
+                    StoryInfoKind::ContentControl
+                };
+                (kind, owner.parent.clone(), root.to_owned())
+            });
+            if let Some((kind, parent, root)) = nested {
                 return StoryInfo {
                     story,
                     kind,
-                    parent,
+                    parent: Some(parent),
                     root,
                     part: None,
                     uses: None,
                 };
             }
+            let root = story.clone();
             let (kind, part, uses) = match index.roles.get(&story) {
                 Some((role, part)) => (
                     if *role == StoryKind::Header {
@@ -230,7 +233,10 @@ mod tests {
         ] {
             let value = serde_json::json!(name);
             assert_eq!(serde_json::to_value(kind).unwrap(), value);
-            assert_eq!(serde_json::from_value::<StoryInfoKind>(value).unwrap(), kind);
+            assert_eq!(
+                serde_json::from_value::<StoryInfoKind>(value).unwrap(),
+                kind
+            );
             assert_eq!(StoryInfoKind::parse(name), Some(kind));
         }
     }
