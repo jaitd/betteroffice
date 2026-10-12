@@ -207,7 +207,9 @@ export interface DocxPluginGeometry {
   /**
    * Every visible fragment in overlay-layer pixels. The anchor is the collapsed end of the
    * last fragment, a wholly hidden target's boundary, or its paragraph; pageRect is its page.
-   * Refuses stale or unrendered layouts.
+   * A header or footer target has fragments on every built page that paints it and anchors on
+   * the first; one no page paints is `missing-target` once the layout is complete and
+   * `layout-unavailable` before. Refuses stale or unrendered layouts.
    */
   getAnchorGeometry(target: DocxGeometryTarget): DocxAnchorGeometryResult;
 }
@@ -222,8 +224,9 @@ export type DocxPluginNavigationFailureCode =
 /** @experimental The plugin API may change in minor releases. */
 export interface DocxPluginNavigation {
   /**
-   * Scrolls a body paragraph into view once pending input and the layout are current. Focus and
-   * selection stay where they are unless `focus` is set.
+   * Scrolls a body paragraph, including one in a table cell, into view once pending input and the
+   * layout are current. Focus and selection stay where they are unless `focus` is set. Header and
+   * footer paragraphs refuse with `unsupported`.
    */
   scrollToParagraph(
     target: { story: string; paraId: string },
