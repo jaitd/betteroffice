@@ -51,7 +51,7 @@ export interface DocxPluginEditorAccess {
   /** Whether the document is open for viewing only, with no copy on this thread. */
   viewer?(): boolean;
   workerOpen?(): boolean;
-  workerRead?: Pick<DocxPluginReadClient, 'version' | 'readParagraphs' | 'findText'>;
+  workerRead?: Pick<DocxPluginReadClient, 'version' | 'readParagraphs' | 'listStories' | 'readStories' | 'findText'>;
 }
 
 const LAYOUT_WAIT_MS = 30_000;
@@ -143,6 +143,8 @@ export function createPluginClients(
       read: {
         version: () => guarded(() => read.version()),
         readParagraphs: (request) => guarded(() => read.readParagraphs(request)),
+        listStories: () => guarded(() => read.listStories()),
+        readStories: (request) => guarded(() => read.readStories(request)),
         findText: (request) => guarded(() => read.findText(request)),
         validateEdits: async () => refusalOf(invocation) ?? pluginRefusal('unsupported-policy'),
       },
