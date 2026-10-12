@@ -69,9 +69,9 @@ use crate::{
     FontFamilyPatch, FormatPolicy, InlineFormatDelta, Loc, LocRange, MergeDirection, OpError,
     ParaAttrDelta, ParaSelector, ParagraphAnchor, ParagraphIdDiagnostic, ParagraphIdOrigin,
     ParagraphIdRefusal, ParagraphOrigin, ParagraphRef, Patch, PersistedParagraphIds, Position,
-    RawOp, ReadParagraphsRequest, SeedParagraph, SegmentContent, SimpleFormat, SourceParagraphRef,
-    SourceStory, SourceStoryKind, SpliceAnchor, StoryRange, TabStop, TableLocator, TableRange,
-    TextTarget, TriState, UndoCaptureMode, UndoSession, story_ref,
+    RawOp, ReadParagraphsRequest, ReadStoriesRequest, SeedParagraph, SegmentContent, SimpleFormat,
+    SourceParagraphRef, SourceStory, SourceStoryKind, SpliceAnchor, StoryRange, TabStop,
+    TableLocator, TableRange, TextTarget, TriState, UndoCaptureMode, UndoSession, story_ref,
 };
 
 #[wasm_bindgen]
@@ -1754,6 +1754,10 @@ impl EditSession {
         docx_layout::register_measure_font(bytes)
     }
 
+    pub fn decode_font(&self, bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+        crate::decode_resident_font(bytes).map_err(js_err)
+    }
+
     /// Registers a measurement view of `base` carrying the vertical metrics
     /// and advance pitch Word measures `requested_family` with — for a face
     /// this host had to substitute. Returns `base` for a family whose metrics
@@ -3220,6 +3224,45 @@ impl EditSession {
         serde_json::to_string(&TableRange { anchor, head }).map_err(js_err)
     }
 
+    pub fn part_metadata_json(&self) -> String {
+        self.engine.doc().part_metadata_json()
+    }
+
+    pub fn set_part_metadata(&self, json: &str, remove_json: &str) -> Result<bool, JsValue> {
+        let remove: Vec<String> = serde_json::from_str(remove_json).map_err(js_err)?;
+        let changed = self
+            .engine
+            .doc()
+            .set_part_metadata(&EditCtx::local("", ""), json, &remove)
+            .map_err(js_err)?;
+        if changed && !remove.is_empty() {
+            self.cell_selection.borrow_mut().take();
+        }
+        Ok(changed)
+    }
+
+    pub fn document_properties_json(&self) -> String {
+        self.engine.doc().document_properties_json()
+    }
+
+    pub fn set_document_property(&self, key: &str, json: &str) -> Result<bool, JsValue> {
+        self.engine
+            .doc()
+            .set_document_property(&EditCtx::local("", ""), key, json)
+            .map_err(js_err)
+    }
+
+    pub fn section_margins_json(&self) -> String {
+        self.engine.doc().section_margins_json()
+    }
+
+    pub fn set_section_margins(&self, section: &str, json: &str) -> Result<bool, JsValue> {
+        self.engine
+            .doc()
+            .set_section_margins(&EditCtx::local("", ""), section, json)
+            .map_err(js_err)
+    }
+
     /// Adds a story holding one paragraph with `initial_text` (which must not
     /// contain paragraph breaks), `p_style` and `alignment`. Receipt:
     /// `{"paraId"}` — the paragraph ending at the story's pilcrow. Errors when
@@ -3489,11 +3532,45 @@ impl EditSession {
     ) -> Result<String, JsValue> {
         let at = loc_index(self.engine.doc(), story, para_id, offset)?;
         let ctx = edit_ctx(author_name, author_date)?;
+        let doc = self.engine.doc();
+        let before = doc.committed_epoch();
+        let indexed = doc
+            .paragraph_index(story)
+            .map_err(js_err)?
+            .para_at(at)
+            .is_some_and(|paragraph| paragraph.node_start <= at && at <= paragraph.pilcrow);
+        let mut attrs = None;
         let receipt = self
             .engine
             .doc()
-            .insert_text(&ctx, Position::new(story, at), text, FormatPolicy::Inherit)
+            .insert_text_observed(
+                &ctx,
+                Position::new(story, at),
+                text,
+                FormatPolicy::Inherit,
+                |effective| attrs = Some(effective.clone()),
+            )
             .map_err(js_err)?;
+        if indexed {
+            if let Some(attrs) = attrs.as_ref() {
+                doc.advance_indexes_after_formatted_text_insert(
+                    story,
+                    before,
+                    doc.committed_epoch(),
+                    at,
+                    text,
+                    Some(attrs),
+                );
+            } else {
+                doc.advance_indexes_after_text_insert(
+                    story,
+                    before,
+                    doc.committed_epoch(),
+                    at,
+                    text,
+                );
+            }
+        }
         Ok(text_receipt_json(receipt))
     }
 
@@ -3516,11 +3593,26 @@ impl EditSession {
         let start = loc_index(self.engine.doc(), story, start_para, start_offset)?;
         let end = loc_index(self.engine.doc(), story, end_para, end_offset)?;
         let ctx = edit_ctx(author_name, author_date)?;
+        let doc = self.engine.doc();
+        let before = doc.committed_epoch();
+        let indexed = !ctx.is_suggesting()
+            && doc
+                .segment_index(story)
+                .map_err(js_err)?
+                .is_text_range(start, end)
+            && doc
+                .paragraph_index(story)
+                .map_err(js_err)?
+                .para_at(start)
+                .is_some_and(|paragraph| paragraph.node_start <= start && end <= paragraph.pilcrow);
         let receipt = self
             .engine
             .doc()
             .delete_range(&ctx, StoryRange::new(story, start, end))
             .map_err(js_err)?;
+        if indexed {
+            doc.advance_indexes_after_text_delete(story, before, doc.committed_epoch(), start, end);
+        }
         Ok(text_receipt_json(receipt))
     }
 
@@ -4221,6 +4313,23 @@ impl EditSession {
         outcome_json(&self.engine.doc().read_paragraphs(&request)).map_err(js_err)
     }
 
+    /// Paragraph texts of selected stories in one read:
+    /// `{"stories"?:"all"|[kind|id…],"byRoot"?,"view","expectVersion"?}` -> `{"ok":true,
+    /// "version","view","truncated","stories":[{"story","ok":true,"paragraphs"}|{"story",
+    /// "ok":false,"failure"}]}`. Listed entries keep their order; a kind expands in id order.
+    pub fn read_stories_json(&self, request: &str) -> Result<String, JsValue> {
+        let request: ReadStoriesRequest = serde_json::from_str(request).map_err(js_err)?;
+        outcome_json(&self.engine.doc().read_stories(&request)).map_err(js_err)
+    }
+
+    /// Every story: `{"ok":true,"version","stories":[{"story","kind","parent"?,"root","part"?,
+    /// "uses"?}]}`, sorted by id.
+    pub fn list_stories_json(&self) -> Result<String, JsValue> {
+        let mut listed = serde_json::to_value(self.engine.doc().list_stories()).map_err(js_err)?;
+        listed["ok"] = Value::Bool(true);
+        Ok(listed.to_string())
+    }
+
     /// Until the matching `end_shared_reads`, committed reads share story projections of each document state.
     pub fn begin_shared_reads(&self) {
         self.engine.doc().begin_shared_reads();
@@ -4279,6 +4388,73 @@ impl EditSession {
     pub fn export_markdown_json(&self, options: &str) -> Result<String, JsValue> {
         let options: ExportOptions = serde_json::from_str(options).map_err(js_err)?;
         outcome_json(&self.engine.doc().export_markdown(&options)).map_err(js_err)
+    }
+
+    pub fn content_control_targets_json(&self) -> Result<String, JsValue> {
+        let txn = self.engine.doc().yrs_doc().transact();
+        let inventory = crate::content_controls::Inventory::build(self.engine.doc(), &txn)
+            .map_err(|failure| js_err(failure.message))?;
+        let mut values = Vec::new();
+        for record in inventory
+            .records
+            .into_iter()
+            .filter(|record| record.listed && !record.alias)
+        {
+            let raw = match record.site {
+                crate::content_controls::Site::Inline { raw, .. }
+                | crate::content_controls::Site::Block { raw, .. } => raw,
+                _ => continue,
+            };
+            let story = story_ref(&txn, &record.story).map_err(js_err)?;
+            let position = story
+                .sticky_index(&txn, raw, Assoc::After)
+                .ok_or_else(|| js_err("control could not be made sticky"))?;
+            values.push(serde_json::json!({"control":record.control,"at":{"story":record.story,"index":raw,"encoded":encode_sticky(&position)}}));
+        }
+        serde_json::to_string(&values).map_err(js_err)
+    }
+
+    pub fn repeat_content_control_at(
+        &self,
+        story: &str,
+        index: u32,
+        remove: bool,
+    ) -> Result<bool, JsValue> {
+        self.engine
+            .doc()
+            .repeat_control_at(&EditCtx::local("", ""), story, index, remove)
+            .map_err(js_err)
+    }
+
+    pub fn set_content_control_value_index(
+        &self,
+        story: &str,
+        index: u32,
+        json: &str,
+    ) -> Result<(), JsValue> {
+        let value = Any::from_json(json).map_err(js_err)?;
+        if self.fill_text_control(story, index, &value)? {
+            return Ok(());
+        }
+        if !matches!(
+            self.engine
+                .doc()
+                .embed_kind(&Position::new(story, index))
+                .map_err(js_err)?
+                .as_deref(),
+            Some("sdt" | "blockSdt")
+        ) {
+            return Err(js_err("unknown-control"));
+        }
+        self.engine
+            .doc()
+            .set_embed_attrs(
+                &EditCtx::local("", ""),
+                Position::new(story, index),
+                vec![("value".to_owned(), value)],
+            )
+            .map(|_| ())
+            .map_err(js_err)
     }
 
     /// The content controls of the committed state:
@@ -4818,19 +4994,13 @@ impl EditSession {
     /// `story_segment_unit_digests`), each as `story_segments` gives them:
     /// `[[segment, …], …]`. Errors on an index past the last unit.
     pub fn story_segment_units(&self, story: &str, units: Vec<u32>) -> Result<String, JsValue> {
-        let all = self
+        let requested = self
             .engine
             .doc()
-            .story_segment_units(story)
-            .map_err(js_err)?;
-        let requested = units
+            .story_segment_units_at(story, &units)
+            .map_err(js_err)?
             .into_iter()
-            .map(|index| {
-                let unit = all
-                    .get(index as usize)
-                    .ok_or_else(|| js_err(format!("no segment unit {index} in {story}")))?;
-                crate::segment_json::segments_json(unit.clone()).map_err(js_err)
-            })
+            .map(|unit| crate::segment_json::segments_json(unit).map_err(js_err))
             .collect::<Result<Vec<Vec<Value>>, JsValue>>()?;
         serde_json::to_string(&requested).map_err(js_err)
     }
@@ -5225,6 +5395,180 @@ pub fn render_docx_markdown_with_pages_json(
 mod tests {
     use super::*;
     use crate::{EditCtx, RawOp};
+
+    #[test]
+    fn paragraph_segments_build_only_requested_units() {
+        let session = EditSession::new(75.0).unwrap();
+        let doc = session.engine.doc();
+        doc.create_story("body", "A😀B", "Normal", "left").unwrap();
+        for _ in 0..80 {
+            doc.split_paragraph(&EditCtx::local("", ""), Position::new("body", 0), None)
+                .unwrap();
+        }
+        let requested = vec![80, 0, 80];
+        doc.segment_index("body").unwrap();
+        let assert_targeted = |rebuild: bool| {
+            let all = doc.story_segment_units("body").unwrap();
+            let expected: Vec<_> = requested
+                .iter()
+                .map(|&unit| {
+                    crate::segment_json::segments_json(all[unit as usize].clone()).unwrap()
+                })
+                .collect();
+            let work: usize = requested.iter().map(|&unit| all[unit as usize].len()).sum();
+            crate::STORY_SEGMENTS_BUILT.with(|built| built.set(0));
+            crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+            let actual: Value = serde_json::from_str(
+                &session
+                    .story_segment_units("body", requested.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(actual, json!(expected));
+            crate::STORY_SEGMENTS_BUILT.with(|built| assert_eq!(built.get(), work));
+            crate::STORY_INDEX_UNITS_BUILT.with(|built| {
+                if rebuild {
+                    assert!(built.get() >= 81);
+                } else {
+                    assert_eq!(built.get(), 0);
+                }
+            });
+            assert!(
+                doc.story_segment_units_at("body", &[81])
+                    .unwrap_err()
+                    .contains("no segment unit 81 in body")
+            );
+        };
+        assert_targeted(false);
+        let para_id = doc.paragraphs("body").unwrap()[80].para_id.clone();
+        let before = doc.committed_epoch();
+        let previous = doc.segment_index("body").unwrap();
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .insert_text("body", &para_id, 1, "!", None, None)
+            .unwrap();
+        doc.advance_indexes_after_text_insert("body", before, doc.committed_epoch(), 81, "!");
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| assert!(built.get() <= 3));
+        let current = doc.segment_index("body").unwrap();
+        assert_eq!(
+            previous.segment_units().unwrap()[0].as_ptr(),
+            current.segment_units().unwrap()[0].as_ptr()
+        );
+        assert_targeted(false);
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .delete_range("body", &para_id, 1, &para_id, 2, None, None)
+            .unwrap();
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| assert!(built.get() <= 3));
+        assert_targeted(false);
+        session
+            .format_range("body", &para_id, 0, &para_id, 1, r#"{"bold":true}"#)
+            .unwrap();
+        assert_targeted(true);
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .insert_text("body", &para_id, 1, "?", None, None)
+            .unwrap();
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| assert!(built.get() <= 4));
+        assert_targeted(false);
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .delete_range("body", &para_id, 2, &para_id, 4, None, None)
+            .unwrap();
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| assert!(built.get() <= 4));
+        assert_targeted(false);
+        let remote = EditSession::new(76.0).unwrap();
+        remote.load(&session.encode_state()).unwrap();
+        remote
+            .insert_text("body", &para_id, 0, "--", None, None)
+            .unwrap();
+        session.apply_update(&remote.encode_state()).unwrap();
+        assert_targeted(true);
+        crate::STORY_SEGMENTS_BUILT.with(|built| built.set(0));
+        assert_eq!(
+            session.story_segment_units("body", Vec::new()).unwrap(),
+            "[]"
+        );
+        crate::STORY_SEGMENTS_BUILT.with(|built| assert_eq!(built.get(), 0));
+    }
+
+    #[test]
+    fn selection_context_reads_only_selected_units_after_text_edits() {
+        let session = EditSession::new(77.0).unwrap();
+        let doc = session.engine.doc();
+        doc.create_story("body", "Seed", "Normal", "left").unwrap();
+        for _ in 0..80 {
+            doc.split_paragraph(&EditCtx::local("", ""), Position::new("body", 0), None)
+                .unwrap();
+        }
+        let para_id = doc.paragraphs("body").unwrap()[80].para_id.clone();
+        for index in 0..40 {
+            doc.create_story(format!("aux-{index}"), "Other", "Normal", "left")
+                .unwrap();
+        }
+        let read_context = |story: &str, para_id: &str| {
+            let (start, _) = doc
+                .paragraph_index(story)
+                .unwrap()
+                .para_span(para_id)
+                .unwrap();
+            doc.selection_context(&StoryRange::new(story, start + 1, start + 1))
+                .unwrap()
+        };
+        read_context("body", &para_id);
+        let assert_targeted = || {
+            crate::SNAPSHOT_CHUNKS_BUILT.with(|built| built.set(0));
+            crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| scanned.set(0));
+            let context = read_context("body", &para_id);
+            assert_eq!(context.para_id, para_id);
+            assert!(!context.in_table);
+            assert_eq!(context.bold, TriState::Off);
+            crate::STORY_INDEX_UNITS_BUILT.with(|built| assert!(built.get() <= 3));
+            crate::SNAPSHOT_CHUNKS_BUILT.with(|built| assert_eq!(built.get(), 2));
+            crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| assert_eq!(scanned.get(), 0));
+        };
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .insert_text("body", &para_id, 1, "!", None, None)
+            .unwrap();
+        assert_targeted();
+        crate::STORY_INDEX_UNITS_BUILT.with(|built| built.set(0));
+        session
+            .delete_range("body", &para_id, 1, &para_id, 2, None, None)
+            .unwrap();
+        assert_targeted();
+        session
+            .format_range("body", &para_id, 0, &para_id, 1, r#"{"bold":true}"#)
+            .unwrap();
+        crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| scanned.set(0));
+        let context = read_context("body", &para_id);
+        assert_eq!(context.bold, TriState::On);
+        crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| assert_eq!(scanned.get(), 0));
+        let cell = Any::Map(Arc::new(std::collections::HashMap::from([(
+            "story".into(),
+            Any::from("aux-0"),
+        )])));
+        let row = Any::Map(Arc::new(std::collections::HashMap::from([(
+            "cells".into(),
+            Any::Array(Arc::from(vec![cell])),
+        )])));
+        doc.apply_raw_ops(
+            "body",
+            vec![RawOp::InsertEmbed {
+                index: 0,
+                kind: "table".into(),
+                payload: vec![("rows".into(), Any::Array(Arc::from(vec![row])))],
+                attrs: yrs::types::Attrs::new(),
+            }],
+            &EditCtx::local("", ""),
+        )
+        .unwrap();
+        crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| scanned.set(0));
+        let cell_id = doc.paragraphs("aux-0").unwrap()[0].para_id.clone();
+        let context = read_context("aux-0", &cell_id);
+        assert!(context.in_table);
+        crate::TABLE_MEMBERSHIP_STORIES_SCANNED.with(|scanned| assert_eq!(scanned.get(), 41));
+    }
 
     #[test]
     fn header_footer_alias_exports_seed_and_follow_legacy_updates() {

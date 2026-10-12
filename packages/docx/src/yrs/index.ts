@@ -39,10 +39,13 @@ import type {
   DocxFindTextResult,
   DocxReadParagraphsRequest,
   DocxReadParagraphsResult,
+  DocxReadStoriesRequest,
+  DocxReadStoriesResult,
   DocxTextTarget,
   DocxValidationResult,
 } from './edits';
 import type { DocxParagraphHeading } from './readTypes';
+import type { DocxListStoriesResult } from './stories';
 import {
   type DocxProposalRegistryState,
   type DocxProposalRequest,
@@ -72,6 +75,29 @@ import type {
 import { preparedDigests, randomClientId, wrapSession } from './yrsSessionFacade';
 export { decodeDocxHostJson } from './yrsSessionFacade';
 
+/** @internal */
+export type {
+  DocxCommandEchoContext,
+  DocxCommandFrame,
+  DocxCommandPageIdentity,
+  DocxCommandPayloads,
+  DocxCommandSelection,
+  DocxEditState,
+  DocxEchoRect,
+  DocxEchoTransform,
+  DocxNavigationIntent,
+  DocxSelectionPointIntent,
+  DocxWorkerEditSession,
+  ResidentCommandConnection,
+  ResidentCommandInitReply,
+} from './residentCommandProtocol';
+/** @internal */
+export type {
+  ResidentEngineWorkerHostModule,
+  ResidentEngineWorkerRequest,
+  ResidentEngineWorkerResponse,
+} from './residentEngineWorkerProtocol';
+
 export * from './layoutMeta';
 export * from './edits';
 export * from './contentControls';
@@ -82,8 +108,10 @@ export * from './structuredExport';
 export * from './pagedExport';
 export * from './inputPositionMap';
 export * from './storyPlainText';
+export * from './stories';
 export type { DocxResolvedPointPosition } from './pointPosition';
-export type { ResidentDocumentRead } from './residentEngineWorkerProtocol';
+export type { ResidentRangeHighlights } from './residentRangeHighlights';
+export type { ResidentDocumentRead, ResidentDocumentReadValues } from './residentEngineWorkerProtocol';
 export type {
   DocxDisplayRange,
   DocxDisplaySelectionInfo,
@@ -112,6 +140,8 @@ export {
   type ResidentProposalReply,
   type ResidentEngineOffscreenPage,
 } from './residentEngineWorkerClient';
+export type { ResidentSourceOpenRequest, ResidentSourcePreviewOptions } from './residentSource';
+export type { ResidentFontFace, ResidentFontEnvironment, ResidentFontEnvironmentEvent, ResidentFontEnvironmentSnapshot } from './residentFontEnvironment';
 export { preloadDocxEngine } from './preloadDocxEngine';
 export {
   residentCaretSnapshotForFrame,
@@ -1418,6 +1448,13 @@ export interface YrsSession extends CollaborationReplica {
   version(): string;
   /** Paragraph texts in one view, with the version they were read at. */
   readParagraphs(request: DocxReadParagraphsRequest): DocxReadParagraphsResult;
+  /**
+   * Paragraph texts of the selected stories in one read. A story that cannot be read reports
+   * why, and the read stops at its limits with `truncated`.
+   */
+  readStories(request: DocxReadStoriesRequest): DocxReadStoriesResult;
+  /** Every story with its kind, container and, for a header or footer, its part and uses. */
+  listStories(): DocxListStoriesResult;
   /** Exact, case-sensitive, paragraph-local search; overlapping matches count separately. */
   findText(request: DocxFindTextRequest): DocxFindTextResult;
   /** Resolves and checks an edit batch without changing anything or reserving ids. */
@@ -1557,3 +1594,4 @@ export async function createYrsSession(options?: CreateYrsSessionOptions): Promi
   await wasm.preloadEditWasm();
   return wrapSession(wasm.createEditSession(clientId), clientId);
 }
+export type { ResidentEngineWorkerSourceOpened } from './residentSourceWorkerClient';

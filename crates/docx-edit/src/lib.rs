@@ -78,6 +78,7 @@ mod control_source;
 mod control_values;
 mod ctx;
 mod deterministic;
+mod document_properties;
 mod fingerprint;
 mod format;
 mod geometry;
@@ -87,8 +88,11 @@ mod identity;
 mod inline_content;
 mod list_marker;
 pub mod media;
+mod resident_font;
+pub use resident_font::{ResidentFontError, decode_resident_font};
 mod op;
 mod ops;
+mod part_metadata;
 mod peer_bootstrap;
 mod policy;
 mod presence;
@@ -96,11 +100,14 @@ mod queries;
 mod raw;
 mod read_state;
 pub mod read_types;
+mod repeating_controls;
 mod script_fonts;
 mod search;
+mod section_margins;
 mod seed;
 mod segment_json;
 mod segments;
+mod stories;
 pub mod structured;
 mod target;
 mod undo;
@@ -153,10 +160,11 @@ pub use seed::{
     seed_docx_preview, seed_from_docx, seed_from_docx_with_generation,
 };
 use segments::{ParagraphIndex, SegmentIndex, build_indexes};
+pub use stories::{AllStories, ListStoriesResponse, StoryInfo, StoryInfoKind, StorySelection};
 pub use target::{
     AtomKind, EditTextView, FindTextRequest, FindTextResponse, ParagraphTarget, ParagraphText,
-    ReadParagraphsRequest, ReadParagraphsResponse, SearchScope, TextAtom, TextMatch, TextPosition,
-    TextRange, TextTarget,
+    ReadParagraphsRequest, ReadParagraphsResponse, ReadStoriesRequest, ReadStoriesResponse,
+    SearchScope, StoryText, TextAtom, TextMatch, TextPosition, TextRange, TextTarget,
 };
 pub use undo::{DocUndoManager, UNDO_CAPTURE_TIMEOUT_MS, UNDO_DEPTH, UndoCaptureMode, UndoSession};
 
@@ -485,12 +493,29 @@ impl<T> Default for EpochCache<T> {
 #[derive(Default)]
 struct StoryRevisions {
     current: u64,
+    structure: u64,
     stamped: HashMap<Arc<str>, u64>,
 }
 
 impl StoryRevisions {
     fn stamp(&mut self, txn: &yrs::TransactionMut, events: &yrs::types::Events) {
         self.current += 1;
+        if events.iter().any(|event| match event {
+            yrs::types::Event::Text(event) => event.delta(txn).iter().any(|delta| match delta {
+                Delta::Inserted(Out::Any(Any::String(_)), _) | Delta::Retain(_, _) => false,
+                Delta::Inserted(_, _) | Delta::Deleted(_) => true,
+            }),
+            yrs::types::Event::Map(event) => {
+                event.path().is_empty()
+                    || event
+                        .keys(txn)
+                        .keys()
+                        .any(|key| matches!(key.as_ref(), KIND_KEY | "rows" | "cells" | "story"))
+            }
+            _ => true,
+        }) {
+            self.structure += 1;
+        }
         for event in events.iter() {
             match event.path().front() {
                 Some(yrs::types::PathSegment::Key(story)) => {
@@ -547,6 +572,12 @@ struct SourceNoteSeparators {
     state: Result<Option<Arc<[u8]>>, String>,
 }
 
+struct TableMembership {
+    epoch: u64,
+    structure: u64,
+    cells: std::collections::HashSet<String>,
+}
+
 /// A single yrs replica of the DOCX editing model.
 pub struct EditingDoc {
     doc: Doc,
@@ -566,6 +597,7 @@ pub struct EditingDoc {
     segment_indexes: Mutex<EpochCache<SegmentIndex>>,
     paragraph_indexes: Mutex<EpochCache<ParagraphIndex>>,
     chunk_snapshots: Mutex<EpochCache<Vec<ops::Chunk>>>,
+    table_membership: Mutex<Option<TableMembership>>,
     shared_read_depth: AtomicU32,
     /// Story projections held only inside a shared-read scope.
     story_views: Mutex<EpochCache<target::StoryView>>,
@@ -592,6 +624,9 @@ impl EditingDoc {
         // explicit transactions below.
         doc.get_or_insert_map(STORIES);
         doc.get_or_insert_map(COMMENTS);
+        doc.get_or_insert_map(part_metadata::PART_METADATA);
+        doc.get_or_insert_map(document_properties::DOCUMENT_PROPERTIES);
+        doc.get_or_insert_map(section_margins::SECTION_MARGINS);
         doc.get_or_insert_map(identity::PARAGRAPH_IDS);
         doc.get_or_insert_map(identity::SOURCE_PARAGRAPH_IDS);
         doc.get_or_insert_map(identity::SESSION);
@@ -626,6 +661,7 @@ impl EditingDoc {
             segment_indexes: Mutex::default(),
             paragraph_indexes: Mutex::default(),
             chunk_snapshots: Mutex::default(),
+            table_membership: Mutex::default(),
             shared_read_depth: AtomicU32::new(0),
             story_views: Mutex::default(),
             source: Mutex::new(None),
@@ -776,6 +812,20 @@ impl EditingDoc {
         index: u32,
         text: &str,
     ) {
+        self.advance_indexes_after_formatted_text_insert(
+            story_id, before, after, index, text, None,
+        );
+    }
+
+    pub(crate) fn advance_indexes_after_formatted_text_insert(
+        &self,
+        story_id: &str,
+        before: u64,
+        after: u64,
+        index: u32,
+        text: &str,
+        attrs: Option<&Attrs>,
+    ) {
         if before.checked_add(1) != Some(after) {
             return;
         }
@@ -791,10 +841,18 @@ impl EditingDoc {
         }
         let mut indexes = self.segment_indexes.lock().unwrap();
         if let Some(mut segments) = indexes.take(story_id, before) {
-            if Arc::make_mut(&mut segments).shift_for_text_insert(index, text) {
+            let segments_mut = Arc::make_mut(&mut segments);
+            let shifted = match attrs {
+                Some(attrs) => {
+                    segments_mut.shift_for_text_insert_formatted(index, text, Some(attrs))
+                }
+                None => segments_mut.shift_for_text_insert(index, text),
+            };
+            if shifted {
                 indexes.insert(story_id, after, segments);
             }
         }
+        self.advance_table_membership(before, after);
     }
 
     /// Advances cached story indexes after a single plain text deletion.
@@ -822,6 +880,18 @@ impl EditingDoc {
             if Arc::make_mut(&mut segments).shift_for_text_delete(start, end) {
                 indexes.insert(story_id, after, segments);
             }
+        }
+        self.advance_table_membership(before, after);
+    }
+
+    fn advance_table_membership(&self, before: u64, after: u64) {
+        let structure = self.story_revisions.lock().unwrap().structure;
+        let mut membership = self.table_membership.lock().unwrap();
+        if let Some(membership) = membership.as_mut()
+            && membership.epoch == before
+        {
+            membership.epoch = after;
+            membership.structure = structure;
         }
     }
 
@@ -1373,6 +1443,34 @@ impl EditingDoc {
         Ok(split_segment_units(self.story_segments(story_id)?))
     }
 
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    pub(crate) fn story_segment_units_at(
+        &self,
+        story_id: &str,
+        units: &[u32],
+    ) -> Result<Vec<Vec<StorySegment>>, String> {
+        let index = self
+            .segment_index(story_id)
+            .map_err(|error| error.to_string())?;
+        let indexed = index.segment_units().expect("formatted index built");
+        let txn = self.doc.transact();
+        units
+            .iter()
+            .map(|&unit| {
+                let segments = indexed
+                    .get(unit as usize)
+                    .ok_or_else(|| format!("no segment unit {unit} in {story_id}"))?;
+                Ok(segments
+                    .iter()
+                    .map(|(insert, attributes)| StorySegment {
+                        content: segment_content(insert.clone(), &txn),
+                        attributes: ordered_attrs(attributes.as_deref()),
+                    })
+                    .collect())
+            })
+            .collect()
+    }
+
     pub fn story_segments(&self, story_id: &str) -> EditResult<Vec<StorySegment>> {
         let txn = self.doc.transact();
         let story = story_ref(&txn, story_id)?;
@@ -1655,7 +1753,17 @@ fn ordered_attrs(attrs: Option<&Attrs>) -> BTreeMap<String, Any> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static STORY_SEGMENTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static STORY_INDEX_UNITS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SNAPSHOT_CHUNKS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static TABLE_MEMBERSHIP_STORIES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn segment_content<T: ReadTxn>(value: Out, txn: &T) -> SegmentContent {
+    #[cfg(test)]
+    STORY_SEGMENTS_BUILT.with(|built| built.set(built.get() + 1));
     match value {
         Out::Any(Any::String(value)) => SegmentContent::Text(value.to_string()),
         Out::YMap(map) if is_pilcrow(&map, txn) => {
