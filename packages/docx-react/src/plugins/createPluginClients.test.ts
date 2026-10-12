@@ -217,6 +217,7 @@ async function setup(
     lifetimeController,
     queries,
     access,
+    invocation,
     clients: createClients(),
     createClients,
     waiting,
@@ -1568,6 +1569,48 @@ describe('plugin story reads', () => {
         expect(worker.flush).not.toHaveBeenCalled();
         expect(worker.replica).not.toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
+      }
+    );
+  }
+
+  for (const invalidated of [true, false]) {
+    test.each(['readParagraphs', 'listStories', 'readStories'] as const)(
+      `worker-only %s ${invalidated ? 'preserves the refusal when its read rejects after invalidation' : 'rethrows a read failure while its invocation is active'}`,
+      async (method) => {
+        const env = await setup();
+        let reject!: (error: unknown) => void;
+        const pending = new Promise<never>((_resolve, no) => { reject = no; });
+        const read = mock(() => pending);
+        const clients = createPluginClients(
+          env.invocation,
+          {
+            ...env.access,
+            workerRead: {
+              version: read,
+              readParagraphs: read,
+              listStories: read,
+              readStories: read,
+              findText: read,
+            },
+          },
+          () => env.state.grant,
+          UNAVAILABLE_DOCX_COMMANDS
+        );
+        const result = method === 'listStories'
+          ? clients.read.listStories()
+          : method === 'readStories'
+            ? clients.read.readStories(headers)
+            : clients.read.readParagraphs({ view: 'accepted' });
+        expect(read).toHaveBeenCalledTimes(1);
+        if (invalidated) env.state.ended = 'document-replaced';
+        const error = new Error('The worker read failed');
+        reject(error);
+        if (invalidated) {
+          expect(await result).toMatchObject({ ok: false, failure: { code: 'document-replaced' } });
+        } else {
+          await expect(result).rejects.toBe(error);
+        }
+        expect(env.events).toEqual([]);
       }
     );
   }

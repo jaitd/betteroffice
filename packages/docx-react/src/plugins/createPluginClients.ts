@@ -136,8 +136,14 @@ export function createPluginClients(
     const guarded = async <T>(operation: () => Promise<T>) => {
       const before = refusalOf(invocation);
       if (before) return before;
-      const result = await operation();
-      return refusalOf(invocation) ?? result;
+      try {
+        const result = await operation();
+        return refusalOf(invocation) ?? result;
+      } catch (error) {
+        const refused = refusalOf(invocation);
+        if (refused) return refused;
+        throw error;
+      }
     };
     return {
       read: {
