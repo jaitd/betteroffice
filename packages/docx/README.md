@@ -191,8 +191,8 @@ U+FFFC listed in `atoms`, tabs stay `\t`, and paragraph marks are excluded. The
 `original` does the reverse. `findText` is exact, case-sensitive and
 paragraph-local, and a `search` target must match exactly once in its scope.
 
-`listStories()` lists every story in id order with its kind (`body`, `table-cell`,
-`content-control`, `header`, `footer`, `footnote`, `endnote` or `other`; comment bodies
+`listStories()` lists every story in id order with its kind (`body`, `tableCell`,
+`contentControl`, `header`, `footer`, `footnote`, `endnote` or `other`; comment bodies
 are not session stories), its `root` story, the story a cell or block control sits
 in, and a header's or footer's `part` and `uses`: the sections whose properties
 reference the part, inheritance applied, whether or not a page shows it (a

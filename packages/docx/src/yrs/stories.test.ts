@@ -37,10 +37,10 @@ it('lists every story with its kind, container, root and header or footer uses',
   expect(listed.version).toBe(session.version());
   expect(listed.stories.map(({ part, ...story }) => (part === undefined ? story : { ...story, part: 'part' }))).toEqual([
     { story: 'body', kind: 'body', root: 'body' },
-    { story: 'body:sdt0', kind: 'content-control', parent: 'body', root: 'body' },
-    { story: 'body:t0:r0c0', kind: 'table-cell', parent: 'body', root: 'body' },
-    { story: 'body:t0:r0c1', kind: 'table-cell', parent: 'body', root: 'body' },
-    { story: 'body:t0:r0c1:t0:r0c0', kind: 'table-cell', parent: 'body:t0:r0c1', root: 'body' },
+    { story: 'body:sdt0', kind: 'contentControl', parent: 'body', root: 'body' },
+    { story: 'body:t0:r0c0', kind: 'tableCell', parent: 'body', root: 'body' },
+    { story: 'body:t0:r0c1', kind: 'tableCell', parent: 'body', root: 'body' },
+    { story: 'body:t0:r0c1:t0:r0c0', kind: 'tableCell', parent: 'body:t0:r0c1', root: 'body' },
     { story: 'en:1', kind: 'endnote', root: 'en:1' },
     { story: 'fn:1', kind: 'footnote', root: 'fn:1' },
     {
@@ -54,7 +54,7 @@ it('lists every story with its kind, container, root and header or footer uses',
       ],
     },
     { story: 'hf:rIdH1', kind: 'header', root: 'hf:rIdH1', part: 'part', uses: [{ sectionIndex: 0, variant: 'default' }] },
-    { story: 'hf:rIdH1:t0:r0c0', kind: 'table-cell', parent: 'hf:rIdH1', root: 'hf:rIdH1' },
+    { story: 'hf:rIdH1:t0:r0c0', kind: 'tableCell', parent: 'hf:rIdH1', root: 'hf:rIdH1' },
     {
       story: 'hf:rIdH2',
       kind: 'header',
@@ -121,7 +121,7 @@ it('refuses a stale version before reading', async () => {
 
 it('reads thousands of stories in one read', async () => {
   const session = await open(storiesDocx({ tables: 1500 }));
-  const cells = session.readStories({ stories: ['table-cell'], view: 'accepted' });
+  const cells = session.readStories({ stories: ['tableCell'], view: 'accepted' });
   if (!cells.ok) throw new Error(cells.failure.message);
   expect(cells.stories).toHaveLength(3004);
   expect(cells.stories.every((story) => story.ok)).toBe(true);

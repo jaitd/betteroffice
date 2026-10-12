@@ -463,7 +463,7 @@ const review = defineDocxPlugin<State>({
   show their tabs, and a tab opens its panel as a drawer over the document that
   Escape closes. Collapsing a panel keeps the plugin running.
 - **Story reads.** `read.listStories()` lists every story in id order with its
-  kind (`body`, `table-cell`, `content-control`, `header`, `footer`, `footnote`,
+  kind (`body`, `tableCell`, `contentControl`, `header`, `footer`, `footnote`,
   `endnote` or `other`; comment bodies are not session stories), its `root`, the
   story a cell or block control sits in, and a header's or footer's `part` and
   `uses`: the sections whose properties reference the part, inheritance applied,

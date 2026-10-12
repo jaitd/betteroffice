@@ -1538,7 +1538,7 @@ describe('plugin read and navigation clients', () => {
 });
 
 describe('plugin story reads', () => {
-  const headers = { stories: ['header', 'content-control'], view: 'accepted' } as const;
+  const headers = { stories: ['header', 'contentControl'], view: 'accepted' } as const;
 
   for (const workerFallback of [false, true]) {
     test.each(['readParagraphs', 'listStories', 'readStories'] as const)(

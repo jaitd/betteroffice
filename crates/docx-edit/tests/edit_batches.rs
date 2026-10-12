@@ -1141,7 +1141,7 @@ fn read_stories_reports_each_story_and_refuses_a_stale_version() {
     assert!(all.contains(&("body:t0:r0c0".to_owned(), Ok(vec!["cell".to_owned()]))));
 
     let chosen = read(
-        Some(vec!["missing", "body:t0:r0c0", "table-cell", "missing"]),
+        Some(vec!["missing", "body:t0:r0c0", "tableCell", "missing"]),
         None,
     )
     .unwrap();

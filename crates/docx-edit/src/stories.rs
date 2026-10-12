@@ -12,7 +12,7 @@ use crate::target::Views;
 /// What a session story holds. Comment bodies are not session stories, so there is no comment
 /// kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "camelCase")]
 pub enum StoryInfoKind {
     Body,
     TableCell,
@@ -28,8 +28,8 @@ impl StoryInfoKind {
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "body" => Self::Body,
-            "table-cell" => Self::TableCell,
-            "content-control" => Self::ContentControl,
+            "tableCell" => Self::TableCell,
+            "contentControl" => Self::ContentControl,
             "header" => Self::Header,
             "footer" => Self::Footer,
             "footnote" => Self::Footnote,
@@ -221,6 +221,19 @@ mod tests {
 
     use super::*;
     use crate::{EditCtx, RawOp};
+
+    #[test]
+    fn story_info_kinds_use_camel_case() {
+        for (kind, name) in [
+            (StoryInfoKind::TableCell, "tableCell"),
+            (StoryInfoKind::ContentControl, "contentControl"),
+        ] {
+            let value = serde_json::json!(name);
+            assert_eq!(serde_json::to_value(kind).unwrap(), value);
+            assert_eq!(serde_json::from_value::<StoryInfoKind>(value).unwrap(), kind);
+            assert_eq!(StoryInfoKind::parse(name), Some(kind));
+        }
+    }
 
     #[test]
     fn without_a_source_section_references_name_headers_and_footers() {

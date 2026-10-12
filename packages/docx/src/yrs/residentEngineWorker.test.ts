@@ -1807,7 +1807,7 @@ test('story reads answer from the worker as the session would', async () => {
     const listed = await w.send({ type: 'documentRead', read: { kind: 'listStories' } });
     expect(listed).toMatchObject({ ok: true, read: { version, value: { ok: true, version } } });
     expect(value(listed)?.stories).toEqual(main.listStories().stories);
-    for (const stories of ['all', ['header', 'table-cell'], ['missing', 'footer']] as const) {
+    for (const stories of ['all', ['header', 'tableCell'], ['missing', 'footer']] as const) {
       const request = { stories, view: 'accepted' as const };
       const reply = await w.send({ type: 'documentRead', read: { kind: 'readStories', request } });
       const local = main.readStories(request);

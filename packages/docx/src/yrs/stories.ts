@@ -7,8 +7,8 @@ import type { DocxExportStory } from './structuredExport';
  */
 export type DocxStoryInfoKind =
   | 'body'
-  | 'table-cell'
-  | 'content-control'
+  | 'tableCell'
+  | 'contentControl'
   | 'header'
   | 'footer'
   | 'footnote'
