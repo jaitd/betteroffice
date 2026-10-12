@@ -195,8 +195,7 @@ paragraph-local, and a `search` target must match exactly once in its scope.
 `contentControl`, `header`, `footer`, `footnote`, `endnote` or `other`; comment bodies
 are not session stories), its `root` story, the story a cell or block control sits
 in, and a header's or footer's `part` and `uses`: the sections whose properties
-reference the part, inheritance applied, whether or not a page shows it (a
-first-page preview's may be incomplete).
+reference the part, inheritance applied, whether or not a page shows it.
 `readStories({ stories, byRoot, view, expectVersion })` reads `'all'` stories (the
 default), or listed kinds and story ids in their order without repeats, in one read.
 An entry naming a kind is a kind, matching each story's own kind, so `header` leaves
