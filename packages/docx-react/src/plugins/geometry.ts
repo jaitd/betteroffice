@@ -207,10 +207,14 @@ function lastInReadingOrder(rects: readonly DisplayListRect[]): DisplayListRect 
   return last && { ...last, x: last.x + last.width, width: 0 };
 }
 
+/** Whether `[from, to)` reaches the inclusive `span`; an empty range reaches the span it sits in. */
+const reaches = ({ from, to }: Interval, [low, high]: readonly [number, number]): boolean =>
+  from <= high && (from === to ? to >= low : to > low);
+
 /** @internal Unbuilt pages whose display positions overlap `ranges`. */
 export function unbuiltPagesOf(queries: DisplayListQueries, ranges: readonly Interval[]): number[] {
   return (queries.displayList?.pages ?? []).flatMap(({ unbuilt, positionSpan }, pageIndex) =>
-    unbuilt && positionSpan && ranges.some(({ from, to }) => from <= positionSpan[1] && to >= positionSpan[0])
+    unbuilt && positionSpan && ranges.some((range) => reaches(range, positionSpan))
       ? [pageIndex]
       : []
   );

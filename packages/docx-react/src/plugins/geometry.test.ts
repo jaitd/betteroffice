@@ -23,7 +23,7 @@ import {
   UNKNOWN_REVISION_PREVIEW_KEY,
 } from '../components/DocxEditor/internals/layoutProvenance';
 import { bindDisplayWindow } from '../components/DocxEditor/internals/displayWindow';
-import { createPluginGeometry, pluginLayout, readPluginPositionAtPoint, toOverlayRect } from './geometry';
+import { createPluginGeometry, pluginLayout, readPluginPositionAtPoint, toOverlayRect, unbuiltPagesOf } from './geometry';
 import type { PagedEditorRef } from '../components/DocxEditor/PagedEditor';
 import type { DocxPointPosition } from '../components/DocxEditor/types';
 import * as proposalPreview from './proposalPreview';
@@ -1216,4 +1216,10 @@ test('isPageBuilt answers from the display list without measuring the pages, and
   expect(measured).toBe(0);
   current = false;
   expect(geometry.isPageBuilt(0)).toBe(false);
+});
+
+test('unbuiltPages takes range ends as exclusive and an empty range where it sits', () => {
+  const source = { displayList: { pages: [{}, { unbuilt: true, positionSpan: [100, 199] }] } } as unknown as DisplayListQueries;
+  const pagesOf = (from: number, to: number) => unbuiltPagesOf(source, [{ from, to }]);
+  expect([pagesOf(90, 100), pagesOf(90, 101), pagesOf(100, 100), pagesOf(199, 205), pagesOf(200, 205)]).toEqual([[], [1], [1], [1], []]);
 });
