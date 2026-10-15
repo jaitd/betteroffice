@@ -1172,3 +1172,33 @@ for (const change of ['id', 'version', 'zoom'] as const) {
     expect(await result).toBeNull();
   });
 }
+
+test('getPageRect answers a page box in overlay pixels with whether it is built', async () => {
+  const pages = document.createElement('div');
+  const canvases = [0, 1].map((pageIndex) => {
+    const canvas = document.createElement('canvas');
+    canvas.dataset.pageIndex = String(pageIndex);
+    pages.appendChild(canvas);
+    return canvas;
+  });
+  const layer = document.createElement('div');
+  place(pages, rectAt(130, 60, 800, 2000));
+  canvases.forEach((canvas, index) => place(canvas, rectAt(180, 84 + index * 500, PAGE.width * 2, PAGE.height * 2)));
+  place(layer, rectAt(20, 10, 900, 2100));
+  const source = {
+    ...queries(),
+    pageCount: () => 2,
+    pageBounds: (pageIndex: number) => (pageIndex < 2 ? { pageIndex, x: 0, y: 0, ...PAGE } : null),
+    displayList: { pages: [{}, { unbuilt: true }] },
+  } as unknown as DisplayListQueries;
+  const dom = createRenderedDomContext(pages, 2, { displayListQueries: source, projector: createCanvasHostProjector(pages, source, 2) });
+  let current = true;
+  const geometry = createPluginGeometry({ id: 'layout', version: 'v', previewVersion: 0, zoom: 2, pageCount: 2 }, dom, layer,
+    () => current, () => null, source, () => null);
+  expect(geometry.getPageRect(0)).toEqual({ pageIndex: 0, x: 160, y: 74, width: PAGE.width * 2, height: PAGE.height * 2, built: true });
+  expect(geometry.getPageRect(1)).toEqual({ pageIndex: 1, x: 160, y: 574, width: PAGE.width * 2, height: PAGE.height * 2, built: false });
+  expect(geometry.getPageRect(2)).toBeNull();
+  expect(await geometry.readAnchorGeometry([])).toEqual([]);
+  current = false;
+  expect(geometry.getPageRect(0)).toBeNull();
+});

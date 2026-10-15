@@ -504,6 +504,12 @@ const review = defineDocxPlugin<State>({
   A target in a header or footer has fragments on every built page that paints it
   and its anchor on the first; one that no laid-out page paints, built or not, is
   `missing-target` once the layout is complete.
+  In the worker-only editor a target whose geometry is still being read is `pending`;
+  `geometry.readAnchorGeometry(targets)` resolves every answer once its read lands,
+  and targets asked in one tick share one read. An answer that reaches pages not
+  built yet lists them in `unbuiltPages` and is provisional.
+  `geometry.getPageRect(pageIndex)` returns a page box in overlay-layer pixels
+  with `built`, or `null`.
   The layer ignores the
   pointer; interactive overlay elements set `pointer-events: auto`.
   `snapshot.selection.displayRange` belongs to one layout and is never an edit

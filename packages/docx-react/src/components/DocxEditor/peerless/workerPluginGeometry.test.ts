@@ -175,14 +175,10 @@ async function shellOf({ engine, frame, window: built }: LaidOut, { zoom = 1, wi
     geometry: { identity, coversThroughSeq: 0, frameEpoch: frame.frameEpoch, layoutRevision: 1, pages, caret: null, selectionRects: [] } };
   const version = engine.geometryReader.version();
   const review = { version, previewVersion: 0 };
-  const reads: Promise<unknown>[] = [];
   const controller = { getSnapshot: () => ({ status: 'ready', view }),
     review: async () => review, reviewSnapshot: () => review,
-    readAt(request: { targets: Parameters<typeof computeAnchorTargetGeometry>[1] }) {
-      const read = Promise.resolve(computeAnchorTargetGeometry(engine.geometryReader, request.targets).map(answer));
-      reads.push(read);
-      return read;
-    },
+    readAt: async (request: { targets: Parameters<typeof computeAnchorTargetGeometry>[1] }) =>
+      computeAnchorTargetGeometry(engine.geometryReader, request.targets).map(answer),
     ref: { getZoom: () => zoom, readParagraphs: async () => ({ ok: true, version, paragraphs: [] }) } };
   const plugin = createWorkerPluginGeometry(controller as never, () => container, () => layer, () => {});
   if (window) plugin.setDisplayWindow(window);
@@ -192,9 +188,7 @@ async function shellOf({ engine, frame, window: built }: LaidOut, { zoom = 1, wi
     version,
     bounds: pages.map(({ bounds }) => bounds),
     async anchor(target: DocxGeometryTarget) {
-      plugin.geometry()!.getAnchorGeometry(target);
-      await Promise.all(reads);
-      return plugin.geometry()!.getAnchorGeometry(target);
+      return (await plugin.geometry()!.readAnchorGeometry([target]))[0]!;
     },
   };
 }

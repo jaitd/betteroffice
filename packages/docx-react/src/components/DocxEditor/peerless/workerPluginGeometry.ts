@@ -1,7 +1,7 @@
 import { createDisplayListQueries, effectiveZoom, loadRustDisplayListQueryEngine, type DisplayListQueries, type DisplayListRect } from '@betteroffice/docx/layout/render';
 import { createRenderedDomContext, type DisplayListPageProjector } from '@betteroffice/docx/plugin-api/RenderedDomContext';
 import type { ProposalGeometryTarget } from '@betteroffice/docx/yrs';
-import { placeRepeated, toOverlayRect } from '../../../plugins/geometry';
+import { pageRectOf, placeRepeated, toOverlayRect, unbuiltPagesOf } from '../../../plugins/geometry';
 import type { DocxAnchorGeometryResult, DocxAnchorRect, DocxGeometryTarget, DocxPluginGeometry, DocxPluginLayout, DocxPluginNavigation, DocxPluginSelection } from '../../../plugins/types';
 import type { createPeerlessShellController } from './shellController';
 import type { PeerlessFrameGeometry } from './viewStore';
@@ -12,27 +12,44 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
   let current: { frame: PeerlessFrameGeometry; version: number; layout: DocxPluginLayout; geometry: DocxPluginGeometry; queries: DisplayListQueries } | null = null;
   let displaySelection: DocxPluginSelection['displayRange'] = null;
   let displayWindow: readonly [number, number] | null = null;
-  const targets = new Map<string, ProposalGeometryTarget | null>();
+  type Read = Exclude<DocxGeometryTarget, { kind: 'proposal' }>;
+  interface Answers { key: string; version: string; resolved: Map<string, ProposalGeometryTarget>; requested: Map<string, Promise<void>>; batch: { targets: Map<string, Read>; read: Promise<void> } | null }
+  let answers: Answers | null = null;
   let generation = 0;
   const listeners = new Set<() => void>();
   const publish = () => { changed(); for (const listener of listeners) listener(); };
   const keyOf = (target: DocxGeometryTarget) => JSON.stringify(target);
+  const answersOf = (layout: DocxPluginLayout) => {
+    const key = `${layout.version}|${layout.previewVersion}|${layout.zoom}`;
+    if (answers?.key !== key) answers = { key, version: layout.version, resolved: new Map(), requested: new Map(), batch: null };
+    return answers;
+  };
   const valid = (layout: DocxPluginLayout, frame: PeerlessFrameGeometry) => {
     const view = controller.getSnapshot().view;
     const review = controller.reviewSnapshot();
     return current?.layout === layout && view?.geometry === frame && view.presentedThroughSeq >= view.throughSeq && view.version === current.version && controller.ref.getZoom() === layout.zoom &&
       review?.version === layout.version && review.previewVersion === layout.previewVersion;
   };
-  const requestTarget = (target: DocxGeometryTarget) => {
+  const resolveBatch = (entry: Answers) => {
+    const { targets } = entry.batch!;
+    entry.batch = null;
+    const keys = [...targets.keys()];
+    return controller.readAt({ kind: 'anchorTargets', targets: [...targets.values()] }, entry.version).then(results => {
+      keys.forEach((key, index) => { if (results[index]) entry.resolved.set(key, results[index]); });
+      if (answers === entry) publish();
+    }, () => {}).finally(() => { for (const key of keys) entry.requested.delete(key); });
+  };
+  /** Starts the worker read of `target` with the others asked in this tick; resolves once it lands. */
+  const requestTarget = (target: DocxGeometryTarget): Promise<void> | undefined => {
     const source = current;
     if (!source || target.kind === 'proposal') return;
+    const entry = answersOf(source.layout);
     const key = keyOf(target);
-    if (targets.has(key)) return;
-    targets.set(key, null);
-    void controller.readAt({ kind: 'anchorTargets', targets: [target] }, source.layout.version).then(results => {
-      if (current !== source) return;
-      targets.set(key, results[0] ?? null); publish();
-    }).catch(() => { if (current === source) targets.delete(key); });
+    if (entry.resolved.has(key) || entry.requested.has(key)) return entry.requested.get(key);
+    entry.batch ??= { targets: new Map(), read: Promise.resolve().then(() => resolveBatch(entry)) };
+    entry.batch.targets.set(key, target);
+    entry.requested.set(key, entry.batch.read);
+    return entry.batch.read;
   };
   const update = async () => {
     const request = ++generation;
@@ -66,19 +83,45 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     const dom = createRenderedDomContext(container, zoom, { displayListQueries: queries, projector });
     const shown = () => valid(layout, frame);
     const unavailable = () => ({ ok: false as const, failure: { code: 'layout-unavailable' as const, message: 'No rendered layout shows this target yet' } });
+    const pending = { ok: false as const, failure: { code: 'pending' as const, message: 'The target geometry is being read' } };
     const project = (rect: DisplayListRect): DocxAnchorRect | null => { const value = projector.projectRect(rect); return value ? { ...toOverlayRect(container, overlay, zoom, value), pageIndex: rect.pageIndex } : null; };
     const repeated = {
       queries, unavailable,
       complete: () => !frame.layoutProvisional && frame.pages.every(({ displayPage }) => displayPage?.unbuilt !== true),
       pending: (pageIndex: number) => !!displayWindow && pageIndex >= displayWindow[0] && pageIndex < displayWindow[1] &&
         queries.displayList?.pages[pageIndex]?.unbuilt === true,
-      respond(rects: readonly DisplayListRect[], end: DisplayListRect | null): DocxAnchorGeometryResult {
+      respond(rects: readonly DisplayListRect[], end: DisplayListRect | null, unbuiltPages: readonly number[] = []): DocxAnchorGeometryResult {
         const projected = rects.map(project);
         const anchor = end && project(end);
         const bounds = anchor && projector.getPageBounds(anchor.pageIndex);
         if (!anchor || !bounds || projected.some(rect => rect === null)) return unavailable();
-        return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects: projected as DocxAnchorRect[], anchor, pageRect: toOverlayRect(container, overlay, zoom, bounds) };
+        return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects: projected as DocxAnchorRect[], anchor,
+          pageRect: toOverlayRect(container, overlay, zoom, bounds), ...(unbuiltPages.length ? { unbuiltPages } : {}) };
       },
+    };
+    const answer = (target: DocxGeometryTarget, request: boolean): DocxAnchorGeometryResult => {
+      if (!shown()) return unavailable();
+      const expected = target.kind === 'range' ? target.version : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : layout.version;
+      if (expected !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
+      if (request) requestTarget(target);
+      const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : answersOf(layout).resolved.get(keyOf(target));
+      if (target.kind === 'proposal' && !resolved) return { ok: false, failure: { code: 'unknown-proposal', message: 'No proposal is registered' } };
+      if (!resolved) return request ? pending : unavailable();
+      if (!resolved.ok) return resolved;
+      if (resolved.root) {
+        return resolved.rIds ? placeRepeated(repeated, resolved.rIds, [...resolved.ranges], resolved.hidden ?? [], resolved.paragraph)
+          : { ok: false, failure: { code: 'unsupported', message: 'The target has no display position' } };
+      }
+      const raw = target.kind === 'proposal' ? review.proposalHighlights[target.id] ?? [] : resolved.ranges.flatMap(range => queries.rangeRects(range.from, range.to));
+      const rects = raw.map(project).filter(value => value !== null);
+      const end = raw.at(-1);
+      const anchorRect = end ? { ...end, x: end.x + end.width, width: 0 } : (resolved.paragraph === null ? null : queries.anchorRect(resolved.paragraph));
+      const anchor = anchorRect && project(anchorRect);
+      const bounds = anchor && projector.getPageBounds(anchor.pageIndex);
+      if (!anchor || !bounds) return unavailable();
+      const unbuiltPages = unbuiltPagesOf(queries, resolved.ranges);
+      return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects, anchor, pageRect: toOverlayRect(container, overlay, zoom, bounds),
+        ...(unbuiltPages.length ? { unbuiltPages } : {}) };
     };
     const geometry: DocxPluginGeometry = {
       layout, dom,
@@ -98,31 +141,16 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
           } }, review.version);
         return shown() && result ? { ...result, layoutId: layout.id } : null;
       },
-      getAnchorGeometry(target) {
-        if (!shown()) return unavailable();
-        const expected = target.kind === 'range' ? target.version : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : layout.version;
-        if (expected !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
-        if (target.kind !== 'proposal') requestTarget(target);
-        const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : targets.get(keyOf(target));
-        if (target.kind === 'proposal' && !resolved) return { ok: false, failure: { code: 'unknown-proposal', message: 'No proposal is registered' } };
-        if (!resolved) return unavailable();
-        if (!resolved.ok) return resolved;
-        if (resolved.root) {
-          return resolved.rIds ? placeRepeated(repeated, resolved.rIds, [...resolved.ranges], resolved.hidden ?? [], resolved.paragraph)
-            : { ok: false, failure: { code: 'unsupported', message: 'The target has no display position' } };
-        }
-        const raw = target.kind === 'proposal' ? review.proposalHighlights[target.id] ?? [] : resolved.ranges.flatMap(range => queries.rangeRects(range.from, range.to));
-        const rects = raw.map(project).filter(value => value !== null);
-        const end = raw.at(-1);
-        const anchorRect = end ? { ...end, x: end.x + end.width, width: 0 } : (resolved.paragraph === null ? null : queries.anchorRect(resolved.paragraph));
-        const anchor = anchorRect && project(anchorRect);
-        const bounds = anchor && projector.getPageBounds(anchor.pageIndex);
-        if (!anchor || !bounds) return unavailable();
-        return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects, anchor, pageRect: toOverlayRect(container, overlay, zoom, bounds) };
+      getAnchorGeometry: target => answer(target, true),
+      async readAnchorGeometry(targets) {
+        await Promise.all(targets.map(requestTarget));
+        const live = current?.geometry;
+        return live && live !== geometry ? live.readAnchorGeometry(targets) : targets.map(target => answer(target, false));
       },
+      getPageRect: pageIndex => shown() ? pageRectOf(queries, pageIndex, projector.getPageBounds(pageIndex), rect => toOverlayRect(container, overlay, zoom, rect)) : null,
     };
     current?.queries.dispose();
-    current = { frame, version: view.version, layout, geometry, queries }; targets.clear(); displaySelection = null; publish();
+    current = { frame, version: view.version, layout, geometry, queries }; displaySelection = null; publish();
     const selection = view.workerSelection;
     if (selection) {
       const accepted = async (point: typeof selection.anchor) => ({ paraId: point.paraId,
@@ -180,6 +208,6 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       displayWindow = window; publish();
     },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    dispose() { generation++; current?.queries.dispose(); current = null; displaySelection = null; targets.clear(); listeners.clear(); },
+    dispose() { generation++; current?.queries.dispose(); current = null; displaySelection = null; answers = null; listeners.clear(); },
   };
 }

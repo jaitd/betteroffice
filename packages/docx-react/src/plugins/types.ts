@@ -171,6 +171,11 @@ export interface DocxAnchorRect extends DocxPluginRect {
   pageIndex: number;
 }
 
+/** A page box in overlay-layer pixels; `built` is false while its content is not laid out. */
+export interface DocxPluginPageRect extends DocxAnchorRect {
+  built: boolean;
+}
+
 export type DocxGeometryTarget =
   | { kind: 'proposal'; id: string }
   | { kind: 'revision'; revisionId: string }
@@ -192,11 +197,13 @@ export type DocxAnchorGeometryResult =
       rects: readonly DocxAnchorRect[];
       anchor: DocxAnchorRect;
       pageRect: DocxPluginRect;
+      /** Pages the target reaches that are not built yet; the answer is provisional while set. */
+      unbuiltPages?: readonly number[];
     }
   | {
       ok: false;
       failure: {
-        code: DocxPluginNavigationFailureCode | 'unknown-proposal';
+        code: DocxPluginNavigationFailureCode | 'unknown-proposal' | 'pending';
         message: string;
       };
     };
@@ -222,8 +229,13 @@ export interface DocxPluginGeometry {
    * A header or footer target has fragments on every built page that paints it and anchors on
    * the first; one that no laid-out page paints, built or not, is `missing-target` once the
    * layout is complete and `layout-unavailable` before. Refuses stale or unrendered layouts.
+   * In the worker-only editor, a target whose geometry is still being read is `pending`.
    */
   getAnchorGeometry(target: DocxGeometryTarget): DocxAnchorGeometryResult;
+  /** {@link getAnchorGeometry} of every target once their reads land, in one batched read. */
+  readAnchorGeometry(targets: readonly DocxGeometryTarget[]): Promise<DocxAnchorGeometryResult[]>;
+  /** Page `pageIndex` in overlay-layer pixels; null when no rendered layout places it. */
+  getPageRect(pageIndex: number): DocxPluginPageRect | null;
 }
 
 export type DocxPluginNavigationFailureCode =

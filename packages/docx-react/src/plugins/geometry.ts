@@ -31,6 +31,7 @@ import type {
   DocxAnchorRect,
   DocxPluginGeometry,
   DocxPluginLayout,
+  DocxPluginPageRect,
   DocxPluginRect,
 } from './types';
 
@@ -197,6 +198,27 @@ function lastInReadingOrder(rects: readonly DisplayListRect[]): DisplayListRect 
   return last && { ...last, x: last.x + last.width, width: 0 };
 }
 
+/** @internal Unbuilt pages whose display positions overlap `ranges`. */
+export function unbuiltPagesOf(queries: DisplayListQueries, ranges: readonly Interval[]): number[] {
+  return (queries.displayList?.pages ?? []).flatMap(({ unbuilt, positionSpan }, pageIndex) =>
+    unbuilt && positionSpan && ranges.some(({ from, to }) => from <= positionSpan[1] && to >= positionSpan[0])
+      ? [pageIndex]
+      : []
+  );
+}
+
+/** @internal The page box of `pageIndex`, or null while it has none. */
+export function pageRectOf(
+  queries: DisplayListQueries,
+  pageIndex: number,
+  bounds: DocxPluginRect | null,
+  overlay: (rect: DocxPluginRect) => DocxPluginRect
+): DocxPluginPageRect | null {
+  return bounds
+    ? { ...overlay(bounds), pageIndex, built: queries.displayList?.pages[pageIndex]?.unbuilt !== true }
+    : null;
+}
+
 /** @internal What {@link placeRepeated} reads of one presented layout. */
 export interface RepeatedPlacement {
   queries: DisplayListQueries;
@@ -207,7 +229,8 @@ export interface RepeatedPlacement {
   /** Projects `rects` and `anchor` onto the pages as they stand now. */
   respond(
     rects: readonly DisplayListRect[],
-    anchor: DisplayListRect | null
+    anchor: DisplayListRect | null,
+    unbuiltPages?: readonly number[]
   ): DocxAnchorGeometryResult;
   unavailable(): DocxAnchorGeometryResult;
 }
@@ -270,7 +293,8 @@ export function placeRepeated(
           ...(paragraph === null ? [] : queries.hfAnchorRects(region, rId, paragraph)),
         ])
       );
-  if (end) return respond(drawn, { ...end, width: 0 });
+  const unbuiltPages = [...new Set(bands.filter((band) => band.unbuilt).map((band) => band.pageIndex))];
+  if (end) return respond(drawn, { ...end, width: 0 }, unbuiltPages);
   const unbuilt = bands.find((band) => band.unbuilt);
   if (!unbuilt) return respond(drawn, null);
   const content = pages[unbuilt.pageIndex]?.contentBounds;
@@ -280,7 +304,7 @@ export function placeRepeated(
     y: (content?.y ?? 0) + (unbuilt.region === 'footer' ? (content?.height ?? 0) : 0),
     width: 0,
     height: 0,
-  });
+  }, unbuiltPages);
 }
 
 /**
@@ -372,7 +396,8 @@ export function createPluginGeometry(
   /** Projects `rects` and `anchor` onto the pages as they stand now. */
   const respond = (
     rects: readonly DisplayListRect[],
-    anchor: DisplayListRect | null
+    anchor: DisplayListRect | null,
+    unbuiltPages: readonly number[] = []
   ): DocxAnchorGeometryResult => {
     const projected = rects.map(project);
     const anchorRect = anchor && project(anchor);
@@ -386,15 +411,22 @@ export function createPluginGeometry(
       rects: projected as DocxAnchorRect[],
       anchor: anchorRect,
       pageRect: toOverlayRect(dom.pagesContainer, layer, dom.zoom, page),
+      ...(unbuiltPages.length ? { unbuiltPages } : {}),
     };
   };
-  return {
+  const drawable = () => shown() || (dom.zoom === layout.zoom && held());
+  const geometry: DocxPluginGeometry = {
     layout,
     dom,
     toOverlayRect: (rect) =>
-      shown() || (dom.zoom === layout.zoom && held())
-        ? toOverlayRect(dom.pagesContainer, layer, dom.zoom, rect)
+      drawable() ? toOverlayRect(dom.pagesContainer, layer, dom.zoom, rect) : null,
+    getPageRect: (pageIndex) =>
+      drawable()
+        ? pageRectOf(queries, pageIndex, projector.getPageBounds(pageIndex), (rect) =>
+            toOverlayRect(dom.pagesContainer, layer, dom.zoom, rect)
+          )
         : null,
+    readAnchorGeometry: async (targets) => targets.map((target) => geometry.getAnchorGeometry(target)),
     getPositionAtPoint(clientX, clientY) {
       if (!shown()) return null;
       const position = resolve(dom.getPositionAtPoint?.(clientX, clientY) ?? null);
@@ -519,7 +551,8 @@ export function createPluginGeometry(
       if ((end && pendingPage(end.pageIndex)) || (fallback && pendingPage(fallback.pageIndex))) {
         return unavailable();
       }
-      return respond(drawn, end ?? (fallback && { ...fallback, width: 0 }));
+      return respond(drawn, end ?? (fallback && { ...fallback, width: 0 }), unbuiltPagesOf(queries, ranges));
     },
   };
+  return geometry;
 }
