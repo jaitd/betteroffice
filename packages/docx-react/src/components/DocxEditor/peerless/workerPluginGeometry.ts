@@ -170,7 +170,7 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
         const { pageBounds, toLayer } = measure();
         return pageRectOf(queries, pageIndex, pageBounds(pageIndex), toLayer);
       },
-      isPageBuilt: pageIndex => pageBuilt(queries, pageIndex),
+      isPageBuilt: pageIndex => shown() && pageBuilt(queries, pageIndex),
     };
     /** Answers `targets` once their reads land, on the layout then current, until the document is replaced. */
     const readAll: ReadAll = async (targets, retry) => {

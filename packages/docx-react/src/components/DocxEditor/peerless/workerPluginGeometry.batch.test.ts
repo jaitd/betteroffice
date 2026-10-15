@@ -250,3 +250,12 @@ test('worker answers outlive a zoom change but not a document replacement', asyn
   await s.replace();
   expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
 });
+
+test('isPageBuilt answers false once its layout is no longer shown', async () => {
+  const s = await shell([true, false]);
+  const first = s.plugin.geometry()!;
+  expect(first.isPageBuilt(0)).toBe(true);
+  await s.rebuild([true, true]);
+  expect(first.isPageBuilt(0)).toBe(false);
+  expect(s.plugin.geometry()!.isPageBuilt(1)).toBe(true);
+});

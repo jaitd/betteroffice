@@ -442,7 +442,7 @@ export function createPluginGeometry(
             toOverlayRect(dom.pagesContainer, layer, dom.zoom, rect)
           )
         : null,
-    isPageBuilt: (pageIndex) => pageBuilt(queries, pageIndex),
+    isPageBuilt: (pageIndex) => drawable() && pageBuilt(queries, pageIndex),
     readAnchorGeometries: async (targets) => targets.map((target) => geometry.getAnchorGeometry(target)),
     getPositionAtPoint(clientX, clientY) {
       if (!shown()) return null;
