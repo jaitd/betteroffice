@@ -2,4 +2,4 @@
 "@betteroffice/docx-react": minor
 ---
 
-Plugin geometry adds `readAnchorGeometries(targets)`, which resolves once batched worker reads land, `getPageRect(pageIndex)` and `isPageBuilt(pageIndex)`. Answers reaching unbuilt pages list `unbuiltPages`. Worker-only viewers report in-flight targets as `pending` and failed reads as `read-failed`.
+Plugin geometry adds required `readAnchorGeometries(targets)`, `getPageRect(pageIndex)` and `isPageBuilt(pageIndex)` (hand-written geometry fakes need them), and answers reaching unbuilt pages list `unbuiltPages`. New anchor failure codes `pending` (worker-only; retry it like `layout-unavailable`) and `read-failed` break exhaustive switches.
