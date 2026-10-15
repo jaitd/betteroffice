@@ -188,7 +188,7 @@ async function shellOf({ engine, frame, window: built }: LaidOut, { zoom = 1, wi
     version,
     bounds: pages.map(({ bounds }) => bounds),
     async anchor(target: DocxGeometryTarget) {
-      return (await plugin.geometry()!.readAnchorGeometry([target]))[0]!;
+      return (await plugin.geometry()!.readAnchorGeometries([target]))[0]!;
     },
   };
 }

@@ -149,10 +149,10 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
         return shown() && result ? { ...result, layoutId: layout.id } : null;
       },
       getAnchorGeometry: target => answer(target, true),
-      async readAnchorGeometry(targets) {
+      async readAnchorGeometries(targets) {
         const reads = await Promise.all(targets.map(requestTarget));
         const live = current?.geometry;
-        if (live && live !== geometry) return live.readAnchorGeometry(targets);
+        if (live && live !== geometry) return live.readAnchorGeometries(targets);
         const measured = measure();
         return targets.map((target, index) => answer(target, false, measured, reads[index] === false));
       },

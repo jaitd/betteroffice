@@ -1198,7 +1198,7 @@ test('getPageRect answers a page box in overlay pixels with whether it is built'
   expect(geometry.getPageRect(0)).toEqual({ pageIndex: 0, x: 160, y: 74, width: PAGE.width * 2, height: PAGE.height * 2, built: true });
   expect(geometry.getPageRect(1)).toEqual({ pageIndex: 1, x: 160, y: 574, width: PAGE.width * 2, height: PAGE.height * 2, built: false });
   expect(geometry.getPageRect(2)).toBeNull();
-  expect(await geometry.readAnchorGeometry([])).toEqual([]);
+  expect(await geometry.readAnchorGeometries([])).toEqual([]);
   current = false;
   expect(geometry.getPageRect(0)).toBeNull();
 });

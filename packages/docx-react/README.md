@@ -505,7 +505,7 @@ const review = defineDocxPlugin<State>({
   and its anchor on the first; one that no laid-out page paints, built or not, is
   `missing-target` once the layout is complete.
   In the worker-only editor a target whose geometry is still being read is `pending`;
-  `geometry.readAnchorGeometry(targets)` resolves every answer once its read lands,
+  `geometry.readAnchorGeometries(targets)` resolves every answer once its read lands,
   and targets asked in one tick share one read. It never answers `pending` or
   rejects: a failed read answers `read-failed`, after which no event follows and
   the next ask starts a new read, so retry directly with backoff. It answers from

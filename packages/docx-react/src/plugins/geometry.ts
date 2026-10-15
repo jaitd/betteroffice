@@ -443,7 +443,7 @@ export function createPluginGeometry(
           )
         : null,
     isPageBuilt: (pageIndex) => pageBuilt(queries, pageIndex),
-    readAnchorGeometry: async (targets) => targets.map((target) => geometry.getAnchorGeometry(target)),
+    readAnchorGeometries: async (targets) => targets.map((target) => geometry.getAnchorGeometry(target)),
     getPositionAtPoint(clientX, clientY) {
       if (!shown()) return null;
       const position = resolve(dom.getPositionAtPoint?.(clientX, clientY) ?? null);

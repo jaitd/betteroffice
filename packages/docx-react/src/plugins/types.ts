@@ -240,7 +240,7 @@ export interface DocxPluginGeometry {
    * `layoutId` or `stale-version`. `layout-unavailable` means no presented layout showed the
    * document then (an edit, zoom or proposal preview not yet painted); ask again on `layout-change`.
    */
-  readAnchorGeometry(targets: readonly DocxGeometryTarget[]): Promise<DocxAnchorGeometryResult[]>;
+  readAnchorGeometries(targets: readonly DocxGeometryTarget[]): Promise<DocxAnchorGeometryResult[]>;
   /** Page `pageIndex` in overlay-layer pixels; null when no rendered layout places it. */
   getPageRect(pageIndex: number): DocxPluginPageRect | null;
   /**

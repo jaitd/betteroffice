@@ -70,9 +70,9 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   };
 }
 
-test('readAnchorGeometry resolves each target once the worker answers', async () => {
+test('readAnchorGeometries resolves each target once the worker answers', async () => {
   const s = await shell();
-  const read = s.plugin.geometry()!.readAnchorGeometry([target('a'), target('b')]);
+  const read = s.plugin.geometry()!.readAnchorGeometries([target('a'), target('b')]);
   await Promise.resolve();
   await s.answer();
   const results = await read;
@@ -97,7 +97,7 @@ test('targets asked in one tick share one worker read and one publish', async ()
   const before = s.published();
   await s.answer();
   expect(s.published() - before).toBe(1);
-  const read = geometry.readAnchorGeometry([target('b'), target('d'), target('e')]);
+  const read = geometry.readAnchorGeometries([target('b'), target('d'), target('e')]);
   await Promise.resolve();
   expect(s.reads.map(read => read.targets.map(({ range }) => range.start.paraId))).toEqual([['d', 'e']]);
   await s.answer();
@@ -128,13 +128,13 @@ test('getPageRect answers in overlay pixels and says whether the page is built',
 });
 
 async function read(s: Awaited<ReturnType<typeof shell>>, targets: DocxGeometryTarget[], settle: 'answer' | 'fail' = 'answer') {
-  const pending = s.plugin.geometry()!.readAnchorGeometry(targets);
+  const pending = s.plugin.geometry()!.readAnchorGeometries(targets);
   await Promise.resolve();
   await s[settle]();
   return pending;
 }
 
-test('readAnchorGeometry measures the pages once for all targets', async () => {
+test('readAnchorGeometries measures the pages once for all targets', async () => {
   const s = await shell();
   const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(target);
   await read(s, many);
@@ -160,10 +160,10 @@ test('isPageBuilt answers from the layout without measuring the pages', async ()
   expect(s.measured()).toBe(before);
 });
 
-test('readAnchorGeometry answers on the layout current when its reads land', async () => {
+test('readAnchorGeometries answers on the layout current when its reads land', async () => {
   const s = await shell([true, false]);
   const first = s.plugin.geometry()!;
-  const pending = first.readAnchorGeometry([target('late')]);
+  const pending = first.readAnchorGeometries([target('late')]);
   await Promise.resolve();
   await s.rebuild([true, true]);
   await s.answer();
@@ -172,9 +172,9 @@ test('readAnchorGeometry answers on the layout current when its reads land', asy
   expect(s.plugin.geometry()!.layout.id).not.toBe(first.layout.id);
 });
 
-test('readAnchorGeometry answers layout-unavailable while the newest edit is not presented', async () => {
+test('readAnchorGeometries answers layout-unavailable while the newest edit is not presented', async () => {
   const s = await shell();
-  const pending = s.plugin.geometry()!.readAnchorGeometry([target('a')]);
+  const pending = s.plugin.geometry()!.readAnchorGeometries([target('a')]);
   await Promise.resolve();
   s.view.throughSeq = 1;
   await s.answer();
