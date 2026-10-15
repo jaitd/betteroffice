@@ -507,14 +507,16 @@ const review = defineDocxPlugin<State>({
   In the worker-only editor a target whose geometry is still being read is `pending`;
   `geometry.readAnchorGeometry(targets)` resolves every answer once its read lands,
   and targets asked in one tick share one read. It never answers `pending` or
-  rejects: a failed read answers `read-failed`, and it answers from the layout
-  current when the reads land, so results can carry a newer `layoutId` or
-  `stale-version`, or `layout-unavailable` while the latest edit, zoom or preview
-  is not painted yet; ask again on `layout-change`. An answer that reaches pages
-  not built yet lists them in `unbuiltPages` and is provisional.
+  rejects: a failed read answers `read-failed`, after which no event follows and
+  the next ask starts a new read, so retry directly with backoff. It answers from
+  the layout current when the reads land, so results can carry a newer `layoutId`
+  or `stale-version`, or `layout-unavailable` while the latest edit, zoom or
+  preview is not painted yet; ask again on `layout-change`. An answer that reaches
+  pages not built yet lists them in `unbuiltPages` and is provisional.
   `geometry.getPageRect(pageIndex)` returns a page box in overlay-layer pixels
-  with `built`, or `null`; `geometry.isPageBuilt(pageIndex)` answers without
-  measuring the DOM.
+  with `built`, or `null` once its layout is no longer shown;
+  `geometry.isPageBuilt(pageIndex)` answers for that geometry's own layout
+  without measuring the DOM, even after it is superseded.
   The layer ignores the
   pointer; interactive overlay elements set `pointer-events: auto`.
   `snapshot.selection.displayRange` belongs to one layout and is never an edit

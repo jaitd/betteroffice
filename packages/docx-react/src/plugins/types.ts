@@ -234,7 +234,8 @@ export interface DocxPluginGeometry {
   getAnchorGeometry(target: DocxGeometryTarget): DocxAnchorGeometryResult;
   /**
    * {@link getAnchorGeometry} of every target once their reads land, in one batched read; it never
-   * answers `pending` and never rejects. A read the worker fails answers `read-failed`; ask again.
+   * answers `pending` and never rejects. A read the worker fails answers `read-failed`; no event
+   * follows it, and the next ask of that target starts a new read, so retry directly with backoff.
    * Answers come from the layout current when the reads land, so a newer layout gives its own
    * `layoutId` or `stale-version`. `layout-unavailable` means no presented layout showed the
    * document then (an edit, zoom or proposal preview not yet painted); ask again on `layout-change`.
@@ -242,7 +243,10 @@ export interface DocxPluginGeometry {
   readAnchorGeometry(targets: readonly DocxGeometryTarget[]): Promise<DocxAnchorGeometryResult[]>;
   /** Page `pageIndex` in overlay-layer pixels; null when no rendered layout places it. */
   getPageRect(pageIndex: number): DocxPluginPageRect | null;
-  /** Whether page `pageIndex` of this layout is laid out, without measuring the DOM. */
+  /**
+   * Whether page `pageIndex` is laid out in this geometry's layout, without measuring the DOM. It
+   * keeps answering for that layout after a newer one supersedes it, while `getPageRect` returns null.
+   */
   isPageBuilt(pageIndex: number): boolean;
 }
 
