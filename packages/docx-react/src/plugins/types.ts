@@ -203,7 +203,7 @@ export type DocxAnchorGeometryResult =
   | {
       ok: false;
       failure: {
-        code: DocxPluginNavigationFailureCode | 'unknown-proposal' | 'pending';
+        code: DocxPluginNavigationFailureCode | 'unknown-proposal' | 'pending' | 'read-failed';
         message: string;
       };
     };
@@ -232,10 +232,18 @@ export interface DocxPluginGeometry {
    * In the worker-only editor, a target whose geometry is still being read is `pending`.
    */
   getAnchorGeometry(target: DocxGeometryTarget): DocxAnchorGeometryResult;
-  /** {@link getAnchorGeometry} of every target once their reads land, in one batched read. */
+  /**
+   * {@link getAnchorGeometry} of every target once their reads land, in one batched read; it never
+   * answers `pending` and never rejects. A read the worker fails answers `read-failed`; ask again.
+   * Answers come from the layout current when the reads land, so a newer layout gives its own
+   * `layoutId` or `stale-version`. `layout-unavailable` means no presented layout showed the
+   * document then (an edit, zoom or proposal preview not yet painted); ask again on `layout-change`.
+   */
   readAnchorGeometry(targets: readonly DocxGeometryTarget[]): Promise<DocxAnchorGeometryResult[]>;
   /** Page `pageIndex` in overlay-layer pixels; null when no rendered layout places it. */
   getPageRect(pageIndex: number): DocxPluginPageRect | null;
+  /** Whether page `pageIndex` of this layout is laid out, without measuring the DOM. */
+  isPageBuilt(pageIndex: number): boolean;
 }
 
 export type DocxPluginNavigationFailureCode =

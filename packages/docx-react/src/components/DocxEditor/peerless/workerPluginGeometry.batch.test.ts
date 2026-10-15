@@ -25,7 +25,8 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   const host = document.createElement('div');
   host.setAttribute('data-peerless-pages-host', '');
   container.appendChild(host);
-  host.getBoundingClientRect = () => rect(0, 0, PAGE.width, 2 * PAGE.height + GAP);
+  let measured = 0;
+  host.getBoundingClientRect = () => { measured += 1; return rect(0, 0, PAGE.width, 2 * PAGE.height + GAP); };
   container.getBoundingClientRect = host.getBoundingClientRect;
   const layer = document.createElement('div');
   layer.getBoundingClientRect = container.getBoundingClientRect;
@@ -37,14 +38,15 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   const view = { identity, version: 0, throughSeq: 0, presentedThroughSeq: 0, workerSelection: null, anchors: null, editState: undefined,
     geometry: frameOf(1, built.map(value => !value)) };
   const review = { version: 'v1', previewVersion: 0 };
-  const reads: { targets: { range: { start: { paraId: string } } }[]; resolve(): void }[] = [];
+  const reads: { targets: { range: { start: { paraId: string } } }[]; resolve(): void; reject(): void }[] = [];
   const answerOf = (paraId: string): ProposalGeometryTarget => {
     const from = paraId === 'late' ? 150 : 10;
     return { ok: true, ranges: [{ from, to: from + 5 }], paragraph: from } as ProposalGeometryTarget;
   };
   const controller = { getSnapshot: () => ({ status: 'ready', view }), review: async () => review, reviewSnapshot: () => review,
-    readAt: (request: { targets: (typeof reads)[number]['targets'] }) => new Promise(resolve => {
-      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(({ range }) => answerOf(range.start.paraId))) });
+    readAt: (request: { targets: (typeof reads)[number]['targets'] }) => new Promise((resolve, reject) => {
+      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(({ range }) => answerOf(range.start.paraId))),
+        reject: () => reject(new Error('worker gone')) });
     }),
     ref: { getZoom: () => 1 } };
   restore.push(spyOn(display, 'loadRustDisplayListQueryEngine').mockResolvedValue({} as never));
@@ -59,9 +61,11 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   const plugin = createWorkerPluginGeometry(controller as never, () => container, () => layer, () => { published += 1; });
   await plugin.update();
   return {
-    plugin, reads,
+    plugin, reads, view,
     published: () => published,
+    measured: () => measured,
     async answer() { for (const read of reads.splice(0)) read.resolve(); await new Promise(resolve => setTimeout(resolve, 0)); },
+    async fail() { for (const read of reads.splice(0)) read.reject(); await new Promise(resolve => setTimeout(resolve, 0)); },
     async rebuild(built: readonly boolean[]) { view.geometry = frameOf(view.geometry.frameEpoch + 1, built.map(value => !value)); await plugin.update(); },
   };
 }
@@ -121,4 +125,58 @@ test('getPageRect answers in overlay pixels and says whether the page is built',
   expect(geometry.getPageRect(0)).toEqual({ pageIndex: 0, x: 0, y: 0, ...PAGE, built: true });
   expect(geometry.getPageRect(1)).toEqual({ pageIndex: 1, x: 0, y: PAGE.height + GAP, ...PAGE, built: false });
   expect(geometry.getPageRect(2)).toBeNull();
+});
+
+async function read(s: Awaited<ReturnType<typeof shell>>, targets: DocxGeometryTarget[], settle: 'answer' | 'fail' = 'answer') {
+  const pending = s.plugin.geometry()!.readAnchorGeometry(targets);
+  await Promise.resolve();
+  await s[settle]();
+  return pending;
+}
+
+test('readAnchorGeometry measures the pages once for all targets', async () => {
+  const s = await shell();
+  const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(target);
+  await read(s, many);
+  let before = s.measured();
+  await read(s, many.slice(0, 1));
+  const one = s.measured() - before;
+  before = s.measured();
+  expect((await read(s, many)).every(result => result.ok)).toBe(true);
+  expect(s.measured() - before).toBe(one);
+});
+
+test('a failed worker read answers read-failed and a later ask reads again', async () => {
+  const s = await shell();
+  expect(await read(s, [target('a')], 'fail')).toEqual([{ ok: false, failure: { code: 'read-failed', message: 'The worker could not read the target geometry' } }]);
+  expect((await read(s, [target('a')]))[0]!.ok).toBe(true);
+});
+
+test('isPageBuilt answers from the layout without measuring the pages', async () => {
+  const s = await shell([true, false]);
+  const geometry = s.plugin.geometry()!;
+  const before = s.measured();
+  expect([0, 1, 2, -1].map(pageIndex => geometry.isPageBuilt(pageIndex))).toEqual([true, false, false, false]);
+  expect(s.measured()).toBe(before);
+});
+
+test('readAnchorGeometry answers on the layout current when its reads land', async () => {
+  const s = await shell([true, false]);
+  const first = s.plugin.geometry()!;
+  const pending = first.readAnchorGeometry([target('late')]);
+  await Promise.resolve();
+  await s.rebuild([true, true]);
+  await s.answer();
+  const [result] = await pending;
+  expect(result).toMatchObject({ ok: true, layoutId: s.plugin.geometry()!.layout.id, rects: [{ pageIndex: 1 }] });
+  expect(s.plugin.geometry()!.layout.id).not.toBe(first.layout.id);
+});
+
+test('readAnchorGeometry answers layout-unavailable while the newest edit is not presented', async () => {
+  const s = await shell();
+  const pending = s.plugin.geometry()!.readAnchorGeometry([target('a')]);
+  await Promise.resolve();
+  s.view.throughSeq = 1;
+  await s.answer();
+  expect(await pending).toEqual([{ ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } }]);
 });

@@ -1,8 +1,8 @@
 import { createDisplayListQueries, effectiveZoom, loadRustDisplayListQueryEngine, type DisplayListQueries, type DisplayListRect } from '@betteroffice/docx/layout/render';
 import { createRenderedDomContext, type DisplayListPageProjector } from '@betteroffice/docx/plugin-api/RenderedDomContext';
 import type { ProposalGeometryTarget } from '@betteroffice/docx/yrs';
-import { pageRectOf, placeRepeated, toOverlayRect, unbuiltPagesOf } from '../../../plugins/geometry';
-import type { DocxAnchorGeometryResult, DocxAnchorRect, DocxGeometryTarget, DocxPluginGeometry, DocxPluginLayout, DocxPluginNavigation, DocxPluginSelection } from '../../../plugins/types';
+import { overlayProjector, pageBuilt, pageRectOf, placeRepeated, toOverlayRect, unbuiltPagesOf } from '../../../plugins/geometry';
+import type { DocxAnchorGeometryResult, DocxAnchorRect, DocxGeometryTarget, DocxPluginGeometry, DocxPluginRect, DocxPluginLayout, DocxPluginNavigation, DocxPluginSelection } from '../../../plugins/types';
 import type { createPeerlessShellController } from './shellController';
 import type { PeerlessFrameGeometry } from './viewStore';
 import { clientPointToPage } from './pagePoint';
@@ -13,7 +13,7 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
   let displaySelection: DocxPluginSelection['displayRange'] = null;
   let displayWindow: readonly [number, number] | null = null;
   type Read = Exclude<DocxGeometryTarget, { kind: 'proposal' }>;
-  interface Answers { key: string; version: string; resolved: Map<string, ProposalGeometryTarget>; requested: Map<string, Promise<void>>; batch: { targets: Map<string, Read>; read: Promise<void> } | null }
+  interface Answers { key: string; version: string; resolved: Map<string, ProposalGeometryTarget>; requested: Map<string, Promise<boolean>>; batch: { targets: Map<string, Read>; read: Promise<boolean> } | null }
   let answers: Answers | null = null;
   let generation = 0;
   const listeners = new Set<() => void>();
@@ -37,10 +37,11 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     return controller.readAt({ kind: 'anchorTargets', targets: [...targets.values()] }, entry.version).then(results => {
       keys.forEach((key, index) => { if (results[index]) entry.resolved.set(key, results[index]); });
       if (answers === entry) publish();
-    }, () => {}).finally(() => { for (const key of keys) entry.requested.delete(key); });
+      return true;
+    }, () => false).finally(() => { for (const key of keys) entry.requested.delete(key); });
   };
   /** Starts the worker read of `target` with the others asked in this tick; resolves once it lands. */
-  const requestTarget = (target: DocxGeometryTarget): Promise<void> | undefined => {
+  const requestTarget = (target: DocxGeometryTarget): Promise<boolean> | undefined => {
     const source = current;
     if (!source || target.kind === 'proposal') return;
     const entry = answersOf(source.layout);
@@ -66,26 +67,32 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     if (request !== generation || controller.getSnapshot().view?.geometry !== frame) return;
     const queries = createDisplayListQueries({ pages: frame.pages.map(page => page.displayPage!).filter(Boolean) }, native);
     const layout: DocxPluginLayout = { id: `${view.identity.session}:${view.version}:${frame.frameEpoch}`, version: review.version, previewVersion: review.previewVersion, zoom, pageCount: frame.pages.length };
-    const projector: DisplayListPageProjector = {
-      projectRect(rect) {
+    /** Projections over the pages host and overlay layer, each measured at most once. */
+    const measure = () => {
+      let host: { x: number; y: number } | null | undefined;
+      let layerOf: ((rect: DocxPluginRect) => DocxPluginRect) | undefined;
+      const local = (rect: DisplayListRect) => {
         const page = frame.pages[rect.pageIndex]?.bounds;
-        const host = container.querySelector<HTMLElement>('[data-peerless-pages-host]')?.getBoundingClientRect();
-        if (!page || !host) return null;
-        const origin = container.getBoundingClientRect();
-        const scale = zoom * effectiveZoom(container);
-        return { x: (host.left - origin.left) / scale + page.x + rect.x, y: (host.top - origin.top) / scale + page.y + rect.y, width: rect.width, height: rect.height };
-      },
-      getPageBounds(pageIndex) {
-        const bounds = queries.pageBounds(pageIndex);
-        return bounds && projector.projectRect(bounds);
-      },
+        if (host === undefined) {
+          const hostRect = container.querySelector<HTMLElement>('[data-peerless-pages-host]')?.getBoundingClientRect();
+          const origin = hostRect && container.getBoundingClientRect();
+          const scale = zoom * effectiveZoom(container);
+          host = hostRect && origin ? { x: (hostRect.left - origin.left) / scale, y: (hostRect.top - origin.top) / scale } : null;
+        }
+        return page && host ? { x: host.x + page.x + rect.x, y: host.y + page.y + rect.y, width: rect.width, height: rect.height } : null;
+      };
+      const toLayer = (rect: DocxPluginRect) => (layerOf ??= overlayProjector(container, overlay, zoom))(rect);
+      const pageBounds = (pageIndex: number) => { const bounds = queries.pageBounds(pageIndex); return bounds && local(bounds); };
+      const project = (rect: DisplayListRect): DocxAnchorRect | null => { const value = local(rect); return value ? { ...toLayer(value), pageIndex: rect.pageIndex } : null; };
+      return { local, toLayer, pageBounds, project };
     };
+    const projector: DisplayListPageProjector = { projectRect: rect => measure().local(rect), getPageBounds: pageIndex => measure().pageBounds(pageIndex) };
     const dom = createRenderedDomContext(container, zoom, { displayListQueries: queries, projector });
     const shown = () => valid(layout, frame);
     const unavailable = () => ({ ok: false as const, failure: { code: 'layout-unavailable' as const, message: 'No rendered layout shows this target yet' } });
     const pending = { ok: false as const, failure: { code: 'pending' as const, message: 'The target geometry is being read' } };
-    const project = (rect: DisplayListRect): DocxAnchorRect | null => { const value = projector.projectRect(rect); return value ? { ...toOverlayRect(container, overlay, zoom, value), pageIndex: rect.pageIndex } : null; };
-    const repeated = {
+    const readFailed = { ok: false as const, failure: { code: 'read-failed' as const, message: 'The worker could not read the target geometry' } };
+    const repeatedOf = ({ project, pageBounds, toLayer }: ReturnType<typeof measure>) => ({
       queries, unavailable,
       complete: () => !frame.layoutProvisional && frame.pages.every(({ displayPage }) => displayPage?.unbuilt !== true),
       pending: (pageIndex: number) => !!displayWindow && pageIndex >= displayWindow[0] && pageIndex < displayWindow[1] &&
@@ -93,34 +100,34 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       respond(rects: readonly DisplayListRect[], end: DisplayListRect | null, unbuiltPages: readonly number[] = []): DocxAnchorGeometryResult {
         const projected = rects.map(project);
         const anchor = end && project(end);
-        const bounds = anchor && projector.getPageBounds(anchor.pageIndex);
+        const bounds = anchor && pageBounds(anchor.pageIndex);
         if (!anchor || !bounds || projected.some(rect => rect === null)) return unavailable();
         return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects: projected as DocxAnchorRect[], anchor,
-          pageRect: toOverlayRect(container, overlay, zoom, bounds), ...(unbuiltPages.length ? { unbuiltPages } : {}) };
+          pageRect: toLayer(bounds), ...(unbuiltPages.length ? { unbuiltPages } : {}) };
       },
-    };
-    const answer = (target: DocxGeometryTarget, request: boolean): DocxAnchorGeometryResult => {
+    });
+    const answer = (target: DocxGeometryTarget, request: boolean, measured = measure(), failed = false): DocxAnchorGeometryResult => {
       if (!shown()) return unavailable();
       const expected = target.kind === 'range' ? target.version : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : layout.version;
       if (expected !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
       if (request) requestTarget(target);
       const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : answersOf(layout).resolved.get(keyOf(target));
       if (target.kind === 'proposal' && !resolved) return { ok: false, failure: { code: 'unknown-proposal', message: 'No proposal is registered' } };
-      if (!resolved) return request ? pending : unavailable();
+      if (!resolved) return request ? pending : failed ? readFailed : unavailable();
       if (!resolved.ok) return resolved;
       if (resolved.root) {
-        return resolved.rIds ? placeRepeated(repeated, resolved.rIds, [...resolved.ranges], resolved.hidden ?? [], resolved.paragraph)
+        return resolved.rIds ? placeRepeated(repeatedOf(measured), resolved.rIds, [...resolved.ranges], resolved.hidden ?? [], resolved.paragraph)
           : { ok: false, failure: { code: 'unsupported', message: 'The target has no display position' } };
       }
       const raw = target.kind === 'proposal' ? review.proposalHighlights[target.id] ?? [] : resolved.ranges.flatMap(range => queries.rangeRects(range.from, range.to));
-      const rects = raw.map(project).filter(value => value !== null);
+      const rects = raw.map(measured.project).filter(value => value !== null);
       const end = raw.at(-1);
       const anchorRect = end ? { ...end, x: end.x + end.width, width: 0 } : (resolved.paragraph === null ? null : queries.anchorRect(resolved.paragraph));
-      const anchor = anchorRect && project(anchorRect);
-      const bounds = anchor && projector.getPageBounds(anchor.pageIndex);
+      const anchor = anchorRect && measured.project(anchorRect);
+      const bounds = anchor && measured.pageBounds(anchor.pageIndex);
       if (!anchor || !bounds) return unavailable();
       const unbuiltPages = unbuiltPagesOf(queries, resolved.ranges);
-      return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects, anchor, pageRect: toOverlayRect(container, overlay, zoom, bounds),
+      return { ok: true, version: layout.version, previewVersion: layout.previewVersion, layoutId: layout.id, rects, anchor, pageRect: measured.toLayer(bounds),
         ...(unbuiltPages.length ? { unbuiltPages } : {}) };
     };
     const geometry: DocxPluginGeometry = {
@@ -143,11 +150,18 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       },
       getAnchorGeometry: target => answer(target, true),
       async readAnchorGeometry(targets) {
-        await Promise.all(targets.map(requestTarget));
+        const reads = await Promise.all(targets.map(requestTarget));
         const live = current?.geometry;
-        return live && live !== geometry ? live.readAnchorGeometry(targets) : targets.map(target => answer(target, false));
+        if (live && live !== geometry) return live.readAnchorGeometry(targets);
+        const measured = measure();
+        return targets.map((target, index) => answer(target, false, measured, reads[index] === false));
       },
-      getPageRect: pageIndex => shown() ? pageRectOf(queries, pageIndex, projector.getPageBounds(pageIndex), rect => toOverlayRect(container, overlay, zoom, rect)) : null,
+      getPageRect(pageIndex) {
+        if (!shown()) return null;
+        const { pageBounds, toLayer } = measure();
+        return pageRectOf(queries, pageIndex, pageBounds(pageIndex), toLayer);
+      },
+      isPageBuilt: pageIndex => pageBuilt(queries, pageIndex),
     };
     current?.queries.dispose();
     current = { frame, version: view.version, layout, geometry, queries }; displaySelection = null; publish();

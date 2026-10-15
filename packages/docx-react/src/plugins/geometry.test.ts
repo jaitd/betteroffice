@@ -1202,3 +1202,15 @@ test('getPageRect answers a page box in overlay pixels with whether it is built'
   current = false;
   expect(geometry.getPageRect(0)).toBeNull();
 });
+
+test('isPageBuilt answers from the display list without measuring the pages', () => {
+  const pages = document.createElement('div');
+  let measured = 0;
+  pages.getBoundingClientRect = () => { measured += 1; return rectAt(0, 0, 100, 100); };
+  const source = { ...queries(), pageCount: () => 2, displayList: { pages: [{}, { unbuilt: true }] } } as unknown as DisplayListQueries;
+  const dom = createRenderedDomContext(pages, 1, { displayListQueries: source, projector: createCanvasHostProjector(pages, source, 1) });
+  const geometry = createPluginGeometry({ id: 'layout', version: 'v', previewVersion: 0, zoom: 1, pageCount: 2 }, dom,
+    document.createElement('div'), () => true, () => null, source, () => null);
+  expect([0, 1, 2, -1].map((pageIndex) => geometry.isPageBuilt(pageIndex))).toEqual([true, false, false, false]);
+  expect(measured).toBe(0);
+});

@@ -99,6 +99,15 @@ export function toOverlayRect(
   zoom: number,
   rect: DocxPluginRect
 ): DocxPluginRect {
+  return overlayProjector(pages, layer, zoom)(rect);
+}
+
+/** @internal {@link toOverlayRect} with the origins and zoom measured once, now. */
+export function overlayProjector(
+  pages: HTMLElement,
+  layer: HTMLElement,
+  zoom: number
+): (rect: DocxPluginRect) => DocxPluginRect {
   const pagesRect = pages.getBoundingClientRect();
   const layerRect = layer.getBoundingClientRect();
   const layerZoom = effectiveZoom(layer);
@@ -106,12 +115,12 @@ export function toOverlayRect(
   const originX =
     (pagesRect.left - layerRect.left) / layerZoom - layer.clientLeft + layer.scrollLeft;
   const originY = (pagesRect.top - layerRect.top) / layerZoom - layer.clientTop + layer.scrollTop;
-  return {
+  return (rect) => ({
     x: originX + rect.x * scale,
     y: originY + rect.y * scale,
     width: rect.width * scale,
     height: rect.height * scale,
-  };
+  });
 }
 
 export interface AnchorGeometryAccess {
@@ -207,6 +216,13 @@ export function unbuiltPagesOf(queries: DisplayListQueries, ranges: readonly Int
   );
 }
 
+/** @internal Whether `pageIndex` is a page of `queries` whose content is laid out. */
+export function pageBuilt(queries: DisplayListQueries, pageIndex: number): boolean {
+  const pages = queries.displayList?.pages;
+  if (pages) return pages[pageIndex] !== undefined && pages[pageIndex]!.unbuilt !== true;
+  return Number.isInteger(pageIndex) && pageIndex >= 0 && pageIndex < queries.pageCount();
+}
+
 /** @internal The page box of `pageIndex`, or null while it has none. */
 export function pageRectOf(
   queries: DisplayListQueries,
@@ -215,7 +231,7 @@ export function pageRectOf(
   overlay: (rect: DocxPluginRect) => DocxPluginRect
 ): DocxPluginPageRect | null {
   return bounds
-    ? { ...overlay(bounds), pageIndex, built: queries.displayList?.pages[pageIndex]?.unbuilt !== true }
+    ? { ...overlay(bounds), pageIndex, built: pageBuilt(queries, pageIndex) }
     : null;
 }
 
@@ -426,6 +442,7 @@ export function createPluginGeometry(
             toOverlayRect(dom.pagesContainer, layer, dom.zoom, rect)
           )
         : null,
+    isPageBuilt: (pageIndex) => pageBuilt(queries, pageIndex),
     readAnchorGeometry: async (targets) => targets.map((target) => geometry.getAnchorGeometry(target)),
     getPositionAtPoint(clientX, clientY) {
       if (!shown()) return null;
