@@ -9,11 +9,13 @@ import { clientPointToPage } from './pagePoint';
 
 export function createWorkerPluginGeometry(controller: ReturnType<typeof createPeerlessShellController>, pages: () => HTMLElement | null, layer: () => HTMLElement | null, changed: () => void,
   navigate?: (target: { story: string; paraId: string }, focus: boolean) => Promise<boolean>) {
-  let current: { frame: PeerlessFrameGeometry; version: number; layout: DocxPluginLayout; geometry: DocxPluginGeometry; queries: DisplayListQueries } | null = null;
+  type Read = Exclude<DocxGeometryTarget, { kind: 'proposal' }>;
+  type ReadAll = (targets: readonly DocxGeometryTarget[], retry: boolean) => Promise<DocxAnchorGeometryResult[]>;
+  let current: { frame: PeerlessFrameGeometry; version: number; layout: DocxPluginLayout; geometry: DocxPluginGeometry; queries: DisplayListQueries; readAll: ReadAll } | null = null;
   let displaySelection: DocxPluginSelection['displayRange'] = null;
   let displayWindow: readonly [number, number] | null = null;
-  type Read = Exclude<DocxGeometryTarget, { kind: 'proposal' }>;
-  interface Answers { key: string; version: string; resolved: Map<string, ProposalGeometryTarget>; requested: Map<string, Promise<boolean>>; batch: { targets: Map<string, Read>; read: Promise<boolean> } | null }
+  interface Answers { key: string; version: string; resolved: Map<string, ProposalGeometryTarget>; requested: Map<string, Promise<boolean>>; failed: Set<string>;
+    batch: { targets: Map<string, Read>; read: Promise<boolean> } | null }
   let answers: Answers | null = null;
   let generation = 0;
   const listeners = new Set<() => void>();
@@ -21,7 +23,7 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
   const keyOf = (target: DocxGeometryTarget) => JSON.stringify(target);
   const answersOf = (layout: DocxPluginLayout) => {
     const key = `${layout.version}|${layout.previewVersion}|${layout.zoom}`;
-    if (answers?.key !== key) answers = { key, version: layout.version, resolved: new Map(), requested: new Map(), batch: null };
+    if (answers?.key !== key) answers = { key, version: layout.version, resolved: new Map(), requested: new Map(), failed: new Set(), batch: null };
     return answers;
   };
   const valid = (layout: DocxPluginLayout, frame: PeerlessFrameGeometry) => {
@@ -36,17 +38,21 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     const keys = [...targets.keys()];
     return controller.readAt({ kind: 'anchorTargets', targets: [...targets.values()] }, entry.version).then(results => {
       keys.forEach((key, index) => { if (results[index]) entry.resolved.set(key, results[index]); });
-      if (answers === entry) publish();
       return true;
-    }, () => false).finally(() => { for (const key of keys) entry.requested.delete(key); });
+    }, () => { for (const key of keys) entry.failed.add(key); return false; }).finally(() => {
+      for (const key of keys) entry.requested.delete(key);
+      if (answers === entry) publish();
+    });
   };
-  /** Starts the worker read of `target` with the others asked in this tick; resolves once it lands. */
-  const requestTarget = (target: DocxGeometryTarget): Promise<boolean> | undefined => {
+  /** Starts the worker read of `target` with the others asked in this tick; resolves once it lands, and again after a failure only on `retry`. */
+  const requestTarget = (target: DocxGeometryTarget, retry = false): Promise<boolean> | undefined => {
     const source = current;
     if (!source || target.kind === 'proposal') return;
     const entry = answersOf(source.layout);
     const key = keyOf(target);
     if (entry.resolved.has(key) || entry.requested.has(key)) return entry.requested.get(key);
+    if (entry.failed.has(key) && !retry) return;
+    entry.failed.delete(key);
     entry.batch ??= { targets: new Map(), read: Promise.resolve().then(() => resolveBatch(entry)) };
     entry.batch.targets.set(key, target);
     entry.requested.set(key, entry.batch.read);
@@ -106,14 +112,15 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
           pageRect: toLayer(bounds), ...(unbuiltPages.length ? { unbuiltPages } : {}) };
       },
     });
-    const answer = (target: DocxGeometryTarget, request: boolean, measured = measure(), failed = false): DocxAnchorGeometryResult => {
+    const answer = (target: DocxGeometryTarget, request: boolean, measured = measure()): DocxAnchorGeometryResult => {
       if (!shown()) return unavailable();
       const expected = target.kind === 'range' ? target.version : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : layout.version;
       if (expected !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
       if (request) requestTarget(target);
-      const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : answersOf(layout).resolved.get(keyOf(target));
+      const entry = answersOf(layout);
+      const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : entry.resolved.get(keyOf(target));
       if (target.kind === 'proposal' && !resolved) return { ok: false, failure: { code: 'unknown-proposal', message: 'No proposal is registered' } };
-      if (!resolved) return request ? pending : failed ? readFailed : unavailable();
+      if (!resolved) return entry.failed.has(keyOf(target)) ? readFailed : request ? pending : unavailable();
       if (!resolved.ok) return resolved;
       if (resolved.root) {
         return resolved.rIds ? placeRepeated(repeatedOf(measured), resolved.rIds, [...resolved.ranges], resolved.hidden ?? [], resolved.paragraph)
@@ -149,13 +156,7 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
         return shown() && result ? { ...result, layoutId: layout.id } : null;
       },
       getAnchorGeometry: target => answer(target, true),
-      async readAnchorGeometries(targets) {
-        const reads = await Promise.all(targets.map(requestTarget));
-        const live = current?.geometry;
-        if (live && live !== geometry) return live.readAnchorGeometries(targets);
-        const measured = measure();
-        return targets.map((target, index) => answer(target, false, measured, reads[index] === false));
-      },
+      readAnchorGeometries: targets => readAll(targets, true),
       getPageRect(pageIndex) {
         if (!shown()) return null;
         const { pageBounds, toLayer } = measure();
@@ -163,8 +164,15 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       },
       isPageBuilt: pageIndex => pageBuilt(queries, pageIndex),
     };
+    /** Answers `targets` once their reads land, on the layout then current. */
+    const readAll: ReadAll = async (targets, retry) => {
+      await Promise.all(targets.map(target => requestTarget(target, retry)));
+      if (current && current.geometry !== geometry) return current.readAll(targets, false);
+      const measured = measure();
+      return targets.map(target => answer(target, false, measured));
+    };
     current?.queries.dispose();
-    current = { frame, version: view.version, layout, geometry, queries }; displaySelection = null; publish();
+    current = { frame, version: view.version, layout, geometry, queries, readAll }; displaySelection = null; publish();
     const selection = view.workerSelection;
     if (selection) {
       const accepted = async (point: typeof selection.anchor) => ({ paraId: point.paraId,

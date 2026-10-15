@@ -15,9 +15,13 @@ const rect = (x: number, y: number, width: number, height: number) => new DOMRec
 const restore: { mockRestore(): void }[] = [];
 afterEach(() => { for (const spy of restore.splice(0)) spy.mockRestore(); });
 
-function target(paraId: string): DocxGeometryTarget {
-  return { kind: 'range', version: 'v1', range: { story: 'body', start: { paraId, offset: 0 }, end: { paraId, offset: 1 }, view: 'accepted' } };
+function target(paraId: string, version = 'v1'): DocxGeometryTarget {
+  return { kind: 'range', version, range: { story: 'body', start: { paraId, offset: 0 }, end: { paraId, offset: 1 }, view: 'accepted' } };
 }
+const revision: DocxGeometryTarget = { kind: 'revision', revisionId: 'r' };
+const idOf = (asked: DocxGeometryTarget) => asked.kind === 'range' ? asked.range.start.paraId : asked.kind === 'revision' ? asked.revisionId : asked.kind;
+const unavailable = { ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } };
+const readFailed = { ok: false, failure: { code: 'read-failed', message: 'The worker could not read the target geometry' } };
 
 /** A two-page worker shell whose pages are built per `built`, its anchor reads held until `answer()`. */
 async function shell(built: [boolean, boolean] = [true, true]) {
@@ -30,7 +34,8 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   container.getBoundingClientRect = host.getBoundingClientRect;
   const layer = document.createElement('div');
   layer.getBoundingClientRect = container.getBoundingClientRect;
-  const identity = { session: 's', incarnation: 1, epoch: 1 };
+  let identity = { session: 's', incarnation: 1, epoch: 1 };
+  let zoom = 1;
   const frameOf = (epoch: number, unbuilt: readonly boolean[]) => ({ identity, coversThroughSeq: 0, frameEpoch: epoch, layoutRevision: epoch, caret: null, selectionRects: [],
     pages: unbuilt.map((pending, pageIndex) => ({ page: { pageId: String(pageIndex), pageIndex }, transform: [1, 0, 0, 1, 0, 0],
       bounds: { x: 0, y: pageIndex * (PAGE.height + GAP), ...PAGE },
@@ -38,17 +43,16 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   const view = { identity, version: 0, throughSeq: 0, presentedThroughSeq: 0, workerSelection: null, anchors: null, editState: undefined,
     geometry: frameOf(1, built.map(value => !value)) };
   const review = { version: 'v1', previewVersion: 0 };
-  const reads: { targets: { range: { start: { paraId: string } } }[]; resolve(): void; reject(): void }[] = [];
-  const answerOf = (paraId: string): ProposalGeometryTarget => {
-    const from = paraId === 'late' ? 150 : 10;
+  const reads: { targets: DocxGeometryTarget[]; resolve(): void; reject(): void }[] = [];
+  const answerOf = (asked: DocxGeometryTarget): ProposalGeometryTarget => {
+    const from = idOf(asked) === 'late' ? 150 : 10;
     return { ok: true, ranges: [{ from, to: from + 5 }], paragraph: from } as ProposalGeometryTarget;
   };
   const controller = { getSnapshot: () => ({ status: 'ready', view }), review: async () => review, reviewSnapshot: () => review,
-    readAt: (request: { targets: (typeof reads)[number]['targets'] }) => new Promise((resolve, reject) => {
-      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(({ range }) => answerOf(range.start.paraId))),
-        reject: () => reject(new Error('worker gone')) });
+    readAt: (request: { targets: DocxGeometryTarget[] }) => new Promise((resolve, reject) => {
+      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(answerOf)), reject: () => reject(new Error('worker gone')) });
     }),
-    ref: { getZoom: () => 1 } };
+    ref: { getZoom: () => zoom } };
   restore.push(spyOn(display, 'loadRustDisplayListQueryEngine').mockResolvedValue({} as never));
   restore.push(spyOn(display, 'createDisplayListQueries').mockImplementation(((list: { pages: { unbuilt?: boolean }[] }) => ({
     displayList: list, pageCount: () => 2, pageSize: () => PAGE,
@@ -67,6 +71,11 @@ async function shell(built: [boolean, boolean] = [true, true]) {
     async answer() { for (const read of reads.splice(0)) read.resolve(); await new Promise(resolve => setTimeout(resolve, 0)); },
     async fail() { for (const read of reads.splice(0)) read.reject(); await new Promise(resolve => setTimeout(resolve, 0)); },
     async rebuild(built: readonly boolean[]) { view.geometry = frameOf(view.geometry.frameEpoch + 1, built.map(value => !value)); await plugin.update(); },
+    /** A new document version, laid out and presented. */
+    async edit(version: string) { review.version = version; view.version += 1; await this.rebuild(built); },
+    /** Another document at the same version, as a load replaces the first. */
+    async replace() { identity = { ...identity, session: `${identity.session}+` }; view.identity = identity; await this.rebuild(built); },
+    async zoom(next: number) { zoom = next; await plugin.update(); },
   };
 }
 
@@ -93,13 +102,13 @@ test('targets asked in one tick share one worker read and one publish', async ()
   const geometry = s.plugin.geometry()!;
   for (const paraId of ['a', 'b', 'c', 'b']) geometry.getAnchorGeometry(target(paraId));
   await Promise.resolve();
-  expect(s.reads.map(read => read.targets.map(({ range }) => range.start.paraId))).toEqual([['a', 'b', 'c']]);
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['a', 'b', 'c']]);
   const before = s.published();
   await s.answer();
   expect(s.published() - before).toBe(1);
   const read = geometry.readAnchorGeometries([target('b'), target('d'), target('e')]);
   await Promise.resolve();
-  expect(s.reads.map(read => read.targets.map(({ range }) => range.start.paraId))).toEqual([['d', 'e']]);
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['d', 'e']]);
   await s.answer();
   expect((await read).every(result => result.ok)).toBe(true);
   expect(s.published() - before).toBe(2);
@@ -179,4 +188,19 @@ test('readAnchorGeometries answers layout-unavailable while the newest edit is n
   s.view.throughSeq = 1;
   await s.answer();
   expect(await pending).toEqual([{ ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } }]);
+});
+
+test('a sync caller that saw pending renders again when its read fails, then answers read-failed without reading again', async () => {
+  const s = await shell();
+  const geometry = s.plugin.geometry()!;
+  expect(geometry.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  const before = s.published();
+  await s.fail();
+  expect(s.published() - before).toBe(1);
+  expect(geometry.getAnchorGeometry(target('a'))).toEqual(readFailed);
+  await Promise.resolve();
+  expect(s.reads).toHaveLength(0);
+  expect((await read(s, [target('a')]))[0]!.ok).toBe(true);
+  expect(geometry.getAnchorGeometry(target('a')).ok).toBe(true);
 });
