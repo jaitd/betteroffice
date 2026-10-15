@@ -205,6 +205,18 @@ test('a sync caller that saw pending renders again when its read fails, then ans
   expect(geometry.getAnchorGeometry(target('a')).ok).toBe(true);
 });
 
+test('a read the view moved past is asked again rather than answered read-failed', async () => {
+  const s = await shell();
+  expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  s.view.version += 1;
+  await s.rebuild([true, true]);
+  await s.fail();
+  expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['a']]);
+});
+
 test('a target pinned to another version answers stale-version without a worker read', async () => {
   const s = await shell();
   const pending = s.plugin.geometry()!.readAnchorGeometries([target('a', 'v0'), target('b')]);

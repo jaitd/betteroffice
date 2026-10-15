@@ -40,10 +40,13 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     const { targets } = entry.batch!;
     entry.batch = null;
     const keys = [...targets.keys()];
+    const asked = controller.getSnapshot().view;
+    /** A read the view moved past was superseded, not failed, so the next ask reads again. */
+    const unmoved = () => { const view = controller.getSnapshot().view; return !!view && !!asked && view.version === asked.version && sameView(view.identity, asked.identity); };
     return controller.readAt({ kind: 'anchorTargets', targets: [...targets.values()] }, entry.version).then(results => {
       keys.forEach((key, index) => { if (results[index]) entry.resolved.set(key, results[index]); });
       return true;
-    }, () => { for (const key of keys) entry.failed.add(key); return false; }).finally(() => {
+    }, () => { if (unmoved()) for (const key of keys) entry.failed.add(key); return false; }).finally(() => {
       for (const key of keys) entry.requested.delete(key);
       if (answers === entry) publish();
     });
