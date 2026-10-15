@@ -494,6 +494,19 @@ describe('semantic anchor geometry', () => {
     }
   });
 
+  test('readAnchorGeometries answers every target right away, in order', async () => {
+    const { geometry } = semanticGeometry();
+    const targets: DocxGeometryTarget[] = [
+      PARAGRAPH_TARGET,
+      { kind: 'revision', revisionId: 'r1' },
+      { kind: 'range', version: 'v0', range: TEXT_RANGE },
+    ];
+    const read = geometry.readAnchorGeometries(targets);
+    const answered = targets.map((target) => geometry.getAnchorGeometry(target));
+    expect(answered.map((result) => result.ok || result.failure.code)).toEqual([true, true, 'stale-version']);
+    expect(await read).toEqual(answered);
+  });
+
   test('keeps both pages and places the anchor and page rectangle on the last page', () => {
     const { geometry, source } = semanticGeometry();
     source.rangeRects = () => [RANGE, { ...RANGE, pageIndex: 1, x: 4, width: 9 }];
