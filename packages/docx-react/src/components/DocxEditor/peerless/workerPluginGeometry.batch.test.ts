@@ -204,3 +204,49 @@ test('a sync caller that saw pending renders again when its read fails, then ans
   expect((await read(s, [target('a')]))[0]!.ok).toBe(true);
   expect(geometry.getAnchorGeometry(target('a')).ok).toBe(true);
 });
+
+test('a target pinned to another version answers stale-version without a worker read', async () => {
+  const s = await shell();
+  const pending = s.plugin.geometry()!.readAnchorGeometries([target('a', 'v0'), target('b')]);
+  await Promise.resolve();
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['b']]);
+  await s.answer();
+  expect((await pending).map(result => result.ok || result.failure.code)).toEqual(['stale-version', true]);
+});
+
+test('a version change mid-read answers pinned targets stale-version and reads unpinned ones on the new version', async () => {
+  const s = await shell();
+  const pending = s.plugin.geometry()!.readAnchorGeometries([target('a'), revision]);
+  await Promise.resolve();
+  await s.edit('v2');
+  await s.fail();
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['r']]);
+  await s.answer();
+  const [pinned, unpinned] = await pending;
+  expect(pinned).toEqual({ ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } });
+  expect(unpinned).toMatchObject({ ok: true, version: 'v2', layoutId: s.plugin.geometry()!.layout.id });
+});
+
+test('readAnchorGeometries answers layout-unavailable once the document is replaced and reads nothing from the new one', async () => {
+  const s = await shell();
+  const first = s.plugin.geometry()!;
+  const pending = first.readAnchorGeometries([revision]);
+  await Promise.resolve();
+  await s.replace();
+  await s.answer();
+  expect(s.reads).toHaveLength(0);
+  expect(await pending).toEqual([unavailable]);
+  expect(await first.readAnchorGeometries([revision])).toEqual([unavailable]);
+  await Promise.resolve();
+  expect(s.reads).toHaveLength(0);
+});
+
+test('worker answers outlive a zoom change but not a document replacement', async () => {
+  const s = await shell();
+  await read(s, [target('a')]);
+  await s.zoom(1.5);
+  expect(s.plugin.geometry()!.layout.zoom).toBe(1.5);
+  expect(s.plugin.geometry()!.getAnchorGeometry(target('a')).ok).toBe(true);
+  await s.replace();
+  expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+});

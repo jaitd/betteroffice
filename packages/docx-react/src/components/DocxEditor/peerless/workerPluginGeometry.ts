@@ -4,7 +4,7 @@ import type { ProposalGeometryTarget } from '@betteroffice/docx/yrs';
 import { overlayProjector, pageBuilt, pageRectOf, placeRepeated, toOverlayRect, unbuiltPagesOf } from '../../../plugins/geometry';
 import type { DocxAnchorGeometryResult, DocxAnchorRect, DocxGeometryTarget, DocxPluginGeometry, DocxPluginRect, DocxPluginLayout, DocxPluginNavigation, DocxPluginSelection } from '../../../plugins/types';
 import type { createPeerlessShellController } from './shellController';
-import type { PeerlessFrameGeometry } from './viewStore';
+import type { PeerlessFrameGeometry, PeerlessViewIdentity } from './viewStore';
 import { clientPointToPage } from './pagePoint';
 
 export function createWorkerPluginGeometry(controller: ReturnType<typeof createPeerlessShellController>, pages: () => HTMLElement | null, layer: () => HTMLElement | null, changed: () => void,
@@ -21,8 +21,12 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
   const listeners = new Set<() => void>();
   const publish = () => { changed(); for (const listener of listeners) listener(); };
   const keyOf = (target: DocxGeometryTarget) => JSON.stringify(target);
-  const answersOf = (layout: DocxPluginLayout) => {
-    const key = `${layout.version}|${layout.previewVersion}|${layout.zoom}`;
+  const sameView = (a: PeerlessViewIdentity, b: PeerlessViewIdentity) => a.session === b.session && a.incarnation === b.incarnation && a.epoch === b.epoch;
+  const pinnedVersion = (target: DocxGeometryTarget) => target.kind === 'range' ? target.version
+    : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : undefined;
+  /** Worker answers are display positions of one document version and preview, whatever the zoom. */
+  const answersOf = ({ identity }: PeerlessFrameGeometry, layout: DocxPluginLayout) => {
+    const key = `${identity.session}|${identity.incarnation}|${identity.epoch}|${layout.version}|${layout.previewVersion}`;
     if (answers?.key !== key) answers = { key, version: layout.version, resolved: new Map(), requested: new Map(), failed: new Set(), batch: null };
     return answers;
   };
@@ -44,11 +48,16 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       if (answers === entry) publish();
     });
   };
-  /** Starts the worker read of `target` with the others asked in this tick; resolves once it lands, and again after a failure only on `retry`. */
+  /**
+   * Starts the worker read of `target` with the others asked in this tick; resolves once it lands. A target pinned to
+   * another version is never read, and one whose read failed is read again only on `retry`.
+   */
   const requestTarget = (target: DocxGeometryTarget, retry = false): Promise<boolean> | undefined => {
     const source = current;
     if (!source || target.kind === 'proposal') return;
-    const entry = answersOf(source.layout);
+    const entry = answersOf(source.frame, source.layout);
+    const pinned = pinnedVersion(target);
+    if (pinned !== undefined && pinned !== entry.version) return;
     const key = keyOf(target);
     if (entry.resolved.has(key) || entry.requested.has(key)) return entry.requested.get(key);
     if (entry.failed.has(key) && !retry) return;
@@ -114,10 +123,9 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     });
     const answer = (target: DocxGeometryTarget, request: boolean, measured = measure()): DocxAnchorGeometryResult => {
       if (!shown()) return unavailable();
-      const expected = target.kind === 'range' ? target.version : (target.kind === 'paragraph' || target.kind === 'search') && 'version' in target.paragraph ? target.paragraph.version : layout.version;
-      if (expected !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
+      if ((pinnedVersion(target) ?? layout.version) !== layout.version) return { ok: false, failure: { code: 'stale-version', message: 'The document changed after that version' } };
       if (request) requestTarget(target);
-      const entry = answersOf(layout);
+      const entry = answersOf(frame, layout);
       const resolved = target.kind === 'proposal' ? review.proposalGeometry.targets[target.id] : entry.resolved.get(keyOf(target));
       if (target.kind === 'proposal' && !resolved) return { ok: false, failure: { code: 'unknown-proposal', message: 'No proposal is registered' } };
       if (!resolved) return entry.failed.has(keyOf(target)) ? readFailed : request ? pending : unavailable();
@@ -164,10 +172,13 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
       },
       isPageBuilt: pageIndex => pageBuilt(queries, pageIndex),
     };
-    /** Answers `targets` once their reads land, on the layout then current. */
+    /** Answers `targets` once their reads land, on the layout then current, until the document is replaced. */
     const readAll: ReadAll = async (targets, retry) => {
+      const sameDocument = () => !!current && sameView(current.frame.identity, frame.identity);
+      if (!sameDocument()) return targets.map(unavailable);
       await Promise.all(targets.map(target => requestTarget(target, retry)));
-      if (current && current.geometry !== geometry) return current.readAll(targets, false);
+      if (!sameDocument()) return targets.map(unavailable);
+      if (current!.geometry !== geometry) return current!.readAll(targets, false);
       const measured = measure();
       return targets.map(target => answer(target, false, measured));
     };
