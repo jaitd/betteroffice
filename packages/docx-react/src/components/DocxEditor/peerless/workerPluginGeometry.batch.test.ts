@@ -3,6 +3,7 @@ import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as display from '@betteroffice/docx/layout/render';
 import type { ProposalGeometryTarget } from '@betteroffice/docx/yrs';
 import type { DocxGeometryTarget } from '../../../plugins/types';
+import { WorkerReadSupersededError } from './shellController';
 import { createWorkerPluginGeometry } from './workerPluginGeometry';
 
 const ownsDom = !GlobalRegistrator.isRegistered;
@@ -20,8 +21,8 @@ function target(paraId: string, version = 'v1'): DocxGeometryTarget {
 }
 const revision: DocxGeometryTarget = { kind: 'revision', revisionId: 'r' };
 const idOf = (asked: DocxGeometryTarget) => asked.kind === 'range' ? asked.range.start.paraId : asked.kind === 'revision' ? asked.revisionId : asked.kind;
-const unavailable = { ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } };
-const readFailed = { ok: false, failure: { code: 'read-failed', message: 'The worker could not read the target geometry' } };
+const unavailable = { ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } } as const;
+const readFailed = { ok: false, failure: { code: 'read-failed', message: 'The worker could not read the target geometry' } } as const;
 
 /** A two-page worker shell whose pages are built per `built`, its anchor reads held until `answer()`. */
 async function shell(built: [boolean, boolean] = [true, true]) {
@@ -40,17 +41,17 @@ async function shell(built: [boolean, boolean] = [true, true]) {
     pages: unbuilt.map((pending, pageIndex) => ({ page: { pageId: String(pageIndex), pageIndex }, transform: [1, 0, 0, 1, 0, 0],
       bounds: { x: 0, y: pageIndex * (PAGE.height + GAP), ...PAGE },
       displayPage: { width: PAGE.width, height: PAGE.height, positionSpan: [pageIndex * 100, pageIndex * 100 + 99], ...(pending ? { unbuilt: true } : {}) } })) });
-  const view = { identity, version: 0, throughSeq: 0, presentedThroughSeq: 0, workerSelection: null, anchors: null, editState: undefined,
+  let view = { identity, version: 0, throughSeq: 0, presentedThroughSeq: 0, workerSelection: null, anchors: null, editState: undefined,
     geometry: frameOf(1, built.map(value => !value)) };
   const review = { version: 'v1', previewVersion: 0 };
-  const reads: { targets: DocxGeometryTarget[]; resolve(): void; reject(): void }[] = [];
+  const reads: { targets: DocxGeometryTarget[]; resolve(): void; reject(error?: Error): void }[] = [];
   const answerOf = (asked: DocxGeometryTarget): ProposalGeometryTarget => {
     const from = idOf(asked) === 'late' ? 150 : 10;
     return { ok: true, ranges: [{ from, to: from + 5 }], paragraph: from } as ProposalGeometryTarget;
   };
   const controller = { getSnapshot: () => ({ status: 'ready', view }), review: async () => review, reviewSnapshot: () => review,
     readAt: (request: { targets: DocxGeometryTarget[] }) => new Promise((resolve, reject) => {
-      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(answerOf)), reject: () => reject(new Error('worker gone')) });
+      reads.push({ targets: request.targets, resolve: () => resolve(request.targets.map(answerOf)), reject: (error = new Error('worker gone')) => reject(error) });
     }),
     ref: { getZoom: () => zoom } };
   restore.push(spyOn(display, 'loadRustDisplayListQueryEngine').mockResolvedValue({} as never));
@@ -65,16 +66,18 @@ async function shell(built: [boolean, boolean] = [true, true]) {
   const plugin = createWorkerPluginGeometry(controller as never, () => container, () => layer, () => { published += 1; });
   await plugin.update();
   return {
-    plugin, reads, view,
+    plugin, reads,
+    get view() { return view; },
+    set view(next) { view = next; },
     published: () => published,
     measured: () => measured,
     async answer() { for (const read of reads.splice(0)) read.resolve(); await new Promise(resolve => setTimeout(resolve, 0)); },
-    async fail() { for (const read of reads.splice(0)) read.reject(); await new Promise(resolve => setTimeout(resolve, 0)); },
-    async rebuild(built: readonly boolean[]) { view.geometry = frameOf(view.geometry.frameEpoch + 1, built.map(value => !value)); await plugin.update(); },
+    async fail(error?: Error) { for (const read of reads.splice(0)) read.reject(error); await new Promise(resolve => setTimeout(resolve, 0)); },
+    async rebuild(built: readonly boolean[]) { view = { ...view, geometry: frameOf(view.geometry.frameEpoch + 1, built.map(value => !value)) }; await plugin.update(); },
     /** A new document version, laid out and presented. */
-    async edit(version: string) { review.version = version; view.version += 1; await this.rebuild(built); },
+    async edit(version: string) { review.version = version; view = { ...view, version: view.version + 1 }; await this.rebuild(built); },
     /** Another document at the same version, as a load replaces the first. */
-    async replace() { identity = { ...identity, session: `${identity.session}+` }; view.identity = identity; await this.rebuild(built); },
+    async replace() { identity = { ...identity, session: `${identity.session}+` }; view = { ...view, identity }; await this.rebuild(built); },
     async zoom(next: number) { zoom = next; await plugin.update(); },
   };
 }
@@ -145,7 +148,7 @@ async function read(s: Awaited<ReturnType<typeof shell>>, targets: DocxGeometryT
 
 test('readAnchorGeometries measures the pages once for all targets', async () => {
   const s = await shell();
-  const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(target);
+  const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => target(id));
   await read(s, many);
   let before = s.measured();
   await read(s, many.slice(0, 1));
@@ -185,7 +188,7 @@ test('readAnchorGeometries answers layout-unavailable while the newest edit is n
   const s = await shell();
   const pending = s.plugin.geometry()!.readAnchorGeometries([target('a')]);
   await Promise.resolve();
-  s.view.throughSeq = 1;
+  s.view = { ...s.view, throughSeq: 1 };
   await s.answer();
   expect(await pending).toEqual([{ ok: false, failure: { code: 'layout-unavailable', message: 'No rendered layout shows this target yet' } }]);
 });
@@ -209,12 +212,43 @@ test('a read the view moved past is asked again rather than answered read-failed
   const s = await shell();
   expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
   await Promise.resolve();
-  s.view.version += 1;
+  s.view = { ...s.view, version: s.view.version + 1 };
   await s.rebuild([true, true]);
   await s.fail();
   expect(s.plugin.geometry()!.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
   await Promise.resolve();
   expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['a']]);
+});
+
+test('a superseded read with an unchanged view is pending and read again on the next sync ask', async () => {
+  const s = await shell();
+  const geometry = s.plugin.geometry()!;
+  expect(geometry.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  const asked = s.view;
+  await s.fail(new WorkerReadSupersededError('Worker read was superseded'));
+  expect(s.view).toBe(asked);
+  expect(geometry.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['a']]);
+  await s.answer();
+  expect(geometry.getAnchorGeometry(target('a')).ok).toBe(true);
+});
+
+test('readAnchorGeometries answers layout-unavailable for a superseded read with an unchanged view', async () => {
+  const s = await shell();
+  const geometry = s.plugin.geometry()!;
+  const pending = geometry.readAnchorGeometries([target('a')]);
+  await Promise.resolve();
+  const asked = s.view;
+  await s.fail(new WorkerReadSupersededError('Worker read was superseded'));
+  expect(s.view).toBe(asked);
+  expect(await pending).toEqual([unavailable]);
+  expect(geometry.getAnchorGeometry(target('a'))).toMatchObject({ ok: false, failure: { code: 'pending' } });
+  await Promise.resolve();
+  expect(s.reads.map(read => read.targets.map(idOf))).toEqual([['a']]);
+  await s.answer();
+  expect((await geometry.readAnchorGeometries([target('a')]))[0]!.ok).toBe(true);
 });
 
 test('a target pinned to another version answers stale-version without a worker read', async () => {

@@ -3,7 +3,7 @@ import { createRenderedDomContext, type DisplayListPageProjector } from '@better
 import type { ProposalGeometryTarget } from '@betteroffice/docx/yrs';
 import { overlayProjector, pageBuilt, pageRectOf, placeRepeated, toOverlayRect, unbuiltPagesOf } from '../../../plugins/geometry';
 import type { DocxAnchorGeometryResult, DocxAnchorRect, DocxGeometryTarget, DocxPluginGeometry, DocxPluginRect, DocxPluginLayout, DocxPluginNavigation, DocxPluginSelection } from '../../../plugins/types';
-import type { createPeerlessShellController } from './shellController';
+import { WorkerReadSupersededError, type createPeerlessShellController } from './shellController';
 import type { PeerlessFrameGeometry, PeerlessViewIdentity } from './viewStore';
 import { clientPointToPage } from './pagePoint';
 
@@ -46,7 +46,7 @@ export function createWorkerPluginGeometry(controller: ReturnType<typeof createP
     return controller.readAt({ kind: 'anchorTargets', targets: [...targets.values()] }, entry.version).then(results => {
       keys.forEach((key, index) => { if (results[index]) entry.resolved.set(key, results[index]); });
       return true;
-    }, () => { if (unmoved()) for (const key of keys) entry.failed.add(key); return false; }).finally(() => {
+    }, error => { if (!(error instanceof WorkerReadSupersededError) && unmoved()) for (const key of keys) entry.failed.add(key); return false; }).finally(() => {
       for (const key of keys) entry.requested.delete(key);
       if (answers === entry) publish();
     });
