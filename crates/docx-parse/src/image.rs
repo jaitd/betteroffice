@@ -920,6 +920,34 @@ mod tests {
     }
 
     #[test]
+    fn picture_doc_properties_keep_name_title_and_description_apart() {
+        for container in ["inline", "anchor"] {
+            for (properties, expected) in [
+                (
+                    r#"name="Cover" title="Hero" descr="A harbour""#,
+                    (Some("Cover"), Some("Hero"), Some("A harbour")),
+                ),
+                (r#"title="Only title""#, (None, Some("Only title"), None)),
+                (r#"name="" title="" descr="""#, (None, None, None)),
+                ("", (None, None, None)),
+            ] {
+                let drawing = root(&format!(
+                    r#"<w:drawing><wp:{container}><wp:extent cx="1000000" cy="500000"/><wp:docPr id="1" {properties}/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:{container}></w:drawing>"#
+                ));
+                let image = parse_drawing(&drawing, None, None).unwrap();
+                assert_eq!(
+                    (
+                        image.name.as_deref(),
+                        image.title.as_deref(),
+                        image.alt.as_deref()
+                    ),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
     fn picture_presets_are_read_from_picture_properties() {
         for (geometry, expected) in [
             ("", None),

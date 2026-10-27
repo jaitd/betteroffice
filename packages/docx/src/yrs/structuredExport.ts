@@ -158,13 +158,28 @@ export type DocxExportInline = {
     }
   | {
       kind: 'image';
+      /** `description`, else `title`. */
       altText: string | null;
+      /** `wp:docPr` `name`. */
+      name: string | null;
+      /** `wp:docPr` `title`. */
+      title: string | null;
+      /** `wp:docPr` `descr`. */
+      description: string | null;
       relationshipId: string | null;
       part: string | null;
       externalTarget: string | null;
     }
   | { kind: 'contentControl'; control: DocxControlMetadata; inlines: DocxExportInline[] }
-  | { kind: 'unsupported'; element: string; altText: string | null }
+  /** `name`, `title` and `description` are the drawing's `wp:docPr`, null for other content. */
+  | {
+      kind: 'unsupported';
+      element: string;
+      altText: string | null;
+      name: string | null;
+      title: string | null;
+      description: string | null;
+    }
 );
 
 export type DocxCachedResult =

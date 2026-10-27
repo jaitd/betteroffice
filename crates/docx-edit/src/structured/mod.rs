@@ -334,6 +334,12 @@ pub enum InlineKind {
     },
     Image {
         alt_text: Option<String>,
+        /// `wp:docPr` `name`.
+        name: Option<String>,
+        /// `wp:docPr` `title`.
+        title: Option<String>,
+        /// `wp:docPr` `descr`.
+        description: Option<String>,
         relationship_id: Option<String>,
         part: Option<String>,
         external_target: Option<String>,
@@ -345,6 +351,12 @@ pub enum InlineKind {
     Unsupported {
         element: String,
         alt_text: Option<String>,
+        /// `wp:docPr` `name`, for a drawing that carries one.
+        name: Option<String>,
+        /// `wp:docPr` `title`, for a drawing that carries one.
+        title: Option<String>,
+        /// `wp:docPr` `descr`, for a drawing that carries one.
+        description: Option<String>,
     },
 }
 

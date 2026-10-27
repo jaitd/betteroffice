@@ -123,6 +123,33 @@ pub enum AtomKind {
 pub struct TextAtom {
     pub offset: u32,
     pub kind: AtomKind,
+    /// An image's `wp:docPr` `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// An image's `wp:docPr` `title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// An image's `wp:docPr` `descr`, its alt text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl TextAtom {
+    fn new<T: ReadTxn>(offset: u32, kind: &str, map: Option<&MapRef>, txn: &T) -> Self {
+        let kind = atom_kind(kind);
+        let [name, title, description] = ["name", "title", "alt"].map(|key| {
+            map.filter(|_| kind == AtomKind::Image)
+                .and_then(|map| map_string(map, txn, key))
+                .filter(|value| !value.is_empty())
+        });
+        Self {
+            offset,
+            kind,
+            name,
+            title,
+            description,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -696,10 +723,12 @@ impl StoryView {
                         current.stamp(chunk.start, chunk.end());
                     }
                     if visible(view, ins, del) {
-                        current.atoms.push(TextAtom {
-                            offset: current.view_len,
-                            kind: atom_kind(&kind),
-                        });
+                        current.atoms.push(TextAtom::new(
+                            current.view_len,
+                            &kind,
+                            map.as_ref(),
+                            txn,
+                        ));
                         current.text.push('\u{FFFC}');
                         current.push(chunk.start, 1, ins || del, true);
                     }

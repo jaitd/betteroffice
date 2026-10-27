@@ -391,10 +391,16 @@ mod tests {
         let line = [TextAtom {
             offset: 1,
             kind: AtomKind::LineBreak,
+            name: None,
+            title: None,
+            description: None,
         }];
         let image = [TextAtom {
             offset: 1,
             kind: AtomKind::Image,
+            name: None,
+            title: None,
+            description: None,
         }];
         let same = diff_paragraphs(
             ("a\u{FFFC}b", &line),

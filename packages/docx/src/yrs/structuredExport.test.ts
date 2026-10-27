@@ -263,6 +263,43 @@ describe('structured export', () => {
     }
   });
 
+  it('exports the docPr name, title and description of pictures and drawings', async () => {
+    const drawing = (id: number, properties: string, data: string) =>
+      `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="914400" cy="914400"/><wp:docPr id="${id}" ${properties}/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${data}</a:graphic></wp:inline></w:drawing></w:r>`;
+    const picture = (id: number, properties: string) =>
+      drawing(id, properties, '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdMissing" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></pic:blipFill><pic:spPr/></pic:pic></a:graphicData>');
+    const shape = drawing(9, 'name="Callout" title="Shape title" descr="Shape alt"', '<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:spPr/><wps:bodyPr/></wps:wsp></a:graphicData>');
+    const bytes = docx(
+      `<w:p w14:paraId="0E910001">${picture(1, 'name="{{slot:cover}}" title="Hero" descr="Harbour"')}${picture(2, '')}${picture(3, 'title="Only title"')}${shape}</w:p>`
+    );
+    const drawings = (content: DocxStructuredContent) =>
+      content.stories[0]!.blocks.flatMap((block) =>
+        'paragraph' in block
+          ? block.paragraph.inlines.flatMap((inline) =>
+              inline.kind === 'image' || inline.kind === 'unsupported'
+                ? [{ kind: inline.kind, altText: inline.altText, name: inline.name, title: inline.title, description: inline.description }]
+                : []
+            )
+          : []
+      );
+    const expected: ReturnType<typeof drawings> = [
+      { kind: 'image', altText: 'Harbour', name: '{{slot:cover}}', title: 'Hero', description: 'Harbour' },
+      { kind: 'image', altText: null, name: null, title: null, description: null },
+      { kind: 'image', altText: 'Only title', name: null, title: 'Only title', description: null },
+      { kind: 'unsupported', altText: 'Shape alt', name: 'Callout', title: 'Shape title', description: 'Shape alt' },
+    ];
+    expect(drawings(await exportDocxStructured(bytes, { revisionView: 'accepted' }))).toEqual(expected);
+    const session = await createYrsSession({ clientId: nextClientId++ });
+    try {
+      session.openDocx(bytes, true);
+      const read = session.exportStructured({ revisionView: 'accepted' });
+      if (!read.ok) throw new Error(read.failure.message);
+      expect(drawings(read.content)).toEqual(expected);
+    } finally {
+      session.destroy();
+    }
+  });
+
   it('exports a comment whose cached field result has differently formatted runs', async () => {
     const bytes = docx(
       '<w:p w14:paraId="61000001"><w:commentRangeStart w:id="1"/><w:r><w:t>Annotated</w:t></w:r><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r></w:p>',

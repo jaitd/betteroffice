@@ -221,6 +221,8 @@ larger than the limits on its own reports `limit-exceeded` (page it with
 `readParagraphs` and `readStories` include style-resolved `outlineLevel` and `list`
 facts for accepted and original views, with rendered markers and counters from
 the start of the root story, including for cell and `paraIds` reads.
+Image atoms carry the picture's `wp:docPr` `name`, `title` and `description`
+(alt text) when set.
 
 **Coordinates.** `context.geometry` exists only while a rendered layout shows
 the current version. An overlay may render during a pending layout with that and
@@ -845,7 +847,8 @@ batch offsets (UTF-16, one U+FFFC per inline atom) in the view they name.
 A list number its format cannot write, such as a Roman numeral past 3,999, is
 drawn and exported without a marker, with an `unsupported-numbering` diagnostic.
 Fields export their cached result and are never evaluated; images export alt
-text and relationship metadata, not image data. On a live session,
+text, their `wp:docPr` `name`, `title` and `description`, and relationship
+metadata, not image data. On a live session,
 `session.exportStructured(options)` and `session.exportMarkdown(options)` return
 the content with the version its anchors belong to, without committing or
 publishing anything, and `session.headings(story)` lists a story's headings

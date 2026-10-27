@@ -1465,6 +1465,9 @@
                 "revisions": [],
                 "kind": "image",
                 "altText": "Company logo",
+                "name": "logo",
+                "title": null,
+                "description": "Company logo",
                 "relationshipId": "rIdImage",
                 "part": "word/media/logo.png",
                 "externalTarget": null
@@ -2066,7 +2069,10 @@
                 "revisions": [],
                 "kind": "unsupported",
                 "element": "wps:wsp",
-                "altText": "Process arrow"
+                "altText": "Process arrow",
+                "name": "Arrow",
+                "title": null,
+                "description": "Process arrow"
               },
               {
                 "id": "s0.b22.i2",
@@ -2109,7 +2115,10 @@
                 "revisions": [],
                 "kind": "unsupported",
                 "element": "m:oMath",
-                "altText": "x=1"
+                "altText": "x=1",
+                "name": null,
+                "title": null,
+                "description": null
               },
               {
                 "id": "s0.b22.i4",
@@ -2152,7 +2161,10 @@
                 "revisions": [],
                 "kind": "unsupported",
                 "element": "w:drawing",
-                "altText": null
+                "altText": null,
+                "name": null,
+                "title": null,
+                "description": null
               },
               {
                 "id": "s0.b22.i6",

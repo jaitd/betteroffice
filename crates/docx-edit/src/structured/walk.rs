@@ -3179,6 +3179,9 @@ impl<'a> Exporter<'a> {
             content: InlineKind::Unsupported {
                 element,
                 alt_text: None,
+                name: None,
+                title: None,
+                description: None,
             },
         }
     }
@@ -3274,6 +3277,9 @@ impl<'a> Exporter<'a> {
                     None => InlineKind::Unsupported {
                         element,
                         alt_text: None,
+                        name: None,
+                        title: None,
+                        description: None,
                     },
                 }
             }
@@ -3282,6 +3288,7 @@ impl<'a> Exporter<'a> {
                 return self.inline_control(ctx, payload, base, control_id, records, depth);
             }
             _ => {
+                let mut drawing = [None, None, None];
                 let (element, alt_text) = match kind {
                     "shape" => {
                         let shape = any_str(payload.get("shapeJson"))
@@ -3299,6 +3306,15 @@ impl<'a> Exporter<'a> {
                                 .find_map(|key| shape.get(key)?.as_str().map(str::to_owned))
                                 .filter(|alt| !alt.is_empty())
                         });
+                        if let Some(shape) = &shape {
+                            drawing = ["name", "title", "description"].map(|key| {
+                                shape
+                                    .get(key)
+                                    .and_then(Value::as_str)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_owned)
+                            });
+                        }
                         (if text_box { "wps:txbx" } else { "wps:wsp" }, alt)
                     }
                     "chart" => ("c:chart", any_text(payload.get("title"))),
@@ -3319,9 +3335,13 @@ impl<'a> Exporter<'a> {
                     Some(anchor.clone()),
                     format!("An inline {element} is not represented in the export."),
                 );
+                let [name, title, description] = drawing;
                 InlineKind::Unsupported {
                     element: element.to_owned(),
                     alt_text,
+                    name,
+                    title,
+                    description,
                 }
             }
         };
@@ -3364,10 +3384,15 @@ impl<'a> Exporter<'a> {
             Some(anchor.clone()),
             "Image data is not exported; the image is described by its alt text and relationship.",
         );
+        let [name, title, description] = ["name", "title", "alt"]
+            .map(|key| any_text(payload.get(key)).filter(|value| !value.is_empty()));
         InlineKind::Image {
             alt_text: any_text(payload.get("alt"))
                 .or_else(|| any_text(payload.get("title")))
                 .filter(|alt| !alt.is_empty()),
+            name,
+            title,
+            description,
             relationship_id,
             part: match &target {
                 Some(RelationshipTarget::Part(part)) => Some(part.clone()),

@@ -17,6 +17,7 @@ import type {
   DocxDocumentChange,
   DocxParagraphMatch,
   DocxParagraphList,
+  DocxTextAtom,
   DocxSelectionInfo,
 } from './index';
 
@@ -134,4 +135,11 @@ test('paragraph list is exported by both public roots', () => {
   const core: import('@betteroffice/docx').DocxParagraphList = list;
   expect(core).toEqual(list);
   expect(index).toMatch(/export type \{[^}]*\bDocxParagraphList\b[^}]*\} from '@betteroffice\/docx\/yrs'/);
+});
+
+test('text atom is exported by both public roots', () => {
+  const atom: DocxTextAtom = { offset: 0, kind: 'image', name: 'Picture 1', title: 'Hero', description: 'Harbour' };
+  const core: import('@betteroffice/docx').DocxTextAtom = atom;
+  expect(core).toEqual(atom);
+  expect(index).toMatch(/export type \{[^}]*\bDocxTextAtom\b[^}]*\} from '@betteroffice\/docx\/yrs'/);
 });

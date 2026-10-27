@@ -2249,6 +2249,7 @@ pub(crate) fn image_payload(image: &Value) -> JsonObject {
     };
     map_from_value(json!({
         "src": string(field(Some(image), "src")).unwrap_or_default(),
+        "name": nullish(field(Some(image), "name")),
         "alt": nullish(field(Some(image), "alt")),
         "title": nullish(field(Some(image), "title")),
         "width": number(field(size, "width")).filter(|value| *value != 0.0).map(emu_to_pixels),

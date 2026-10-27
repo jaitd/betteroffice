@@ -61,7 +61,7 @@ describe('picture payload parity', () => {
       const native = imagePayloads(engine);
       expect(native).toHaveLength(2);
       expect([native[0].width, native[0].height].map((px) => Number.isInteger(px))).toEqual([false, false]);
-      expect(native[1]).toMatchObject({ width: 1234567 / 914400 * 96, distTop: 12345 / 914400 * 96, effectExtentLeft: 1000 / 914400 * 96 });
+      expect(native[1]).toMatchObject({ name: 'Picture 1', width: 1234567 / 914400 * 96, distTop: 12345 / 914400 * 96, effectExtentLeft: 1000 / 914400 * 96 });
       expect(imagePayloads(projected)).toEqual(native);
     } finally {
       engine.destroy();

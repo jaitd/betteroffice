@@ -226,6 +226,12 @@ export type DocxAtomKind =
 export interface DocxTextAtom {
   offset: number;
   kind: DocxAtomKind;
+  /** An image's `wp:docPr` `name`; absent when unset. */
+  name?: string;
+  /** An image's `wp:docPr` `title`; absent when unset. */
+  title?: string;
+  /** An image's `wp:docPr` `descr`, its alt text; absent when unset. */
+  description?: string;
 }
 
 /** Numbering in the requested view, counted from the start of the root story. */

@@ -176,6 +176,8 @@ export interface Image {
   mimeType?: string;
   /** Original filename */
   filename?: string;
+  /** Drawing name (`wp:docPr` `name`) */
+  name?: string;
   /** Alt text for accessibility */
   alt?: string;
   /** Title/description */

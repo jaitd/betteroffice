@@ -468,6 +468,7 @@ function imagePayload(image: Image): Attrs {
 
   return dropNulls({
     src: image.src || '',
+    name: image.name ?? null,
     alt: image.alt ?? null,
     title: image.title ?? null,
     width: width ?? null,

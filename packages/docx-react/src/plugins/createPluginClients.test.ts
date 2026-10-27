@@ -10,6 +10,7 @@ import {
   computeProposalGeometryMirror,
   proposalSetIdentity,
   type DocxEditRequest,
+  type DocxTextAtom,
   type ResidentProposalReply,
   type YrsSession,
 } from '@betteroffice/docx/yrs';
@@ -1715,6 +1716,29 @@ test('main session plugin reads expose real style-numbered heading facts', async
   const stories = await env.clients.read.readStories({ stories: ['body'], view: 'accepted' });
   expect(stories).toEqual(env.session.readStories({ stories: ['body'], view: 'accepted' }));
   expect(stories).toMatchObject({ ok: true, stories: [{ story: 'body', paragraphs: expect.arrayContaining([expect.objectContaining(expected)]) }] });
+});
+
+test('plugin reads expose picture docPr name, title and description on image atoms', async () => {
+  const picture = (id: number, properties: string) =>
+    `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="914400" cy="914400"/><wp:docPr id="${id}" ${properties}/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdMissing"/></pic:blipFill><pic:spPr/></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+  const env = await setup({
+    extraBody: `<w:p w14:paraId="0000B001">${picture(1, 'name="{{slot:cover}}" title="Hero" descr="Harbour"')}${run('x')}${picture(2, '')}${picture(3, 'name="Picture 3"')}</w:p>`,
+  });
+  const atoms: DocxTextAtom[] = [
+    { offset: 0, kind: 'image', name: '{{slot:cover}}', title: 'Hero', description: 'Harbour' },
+    { offset: 2, kind: 'image' },
+    { offset: 3, kind: 'image', name: 'Picture 3' },
+  ];
+  const request = { paraIds: ['0000B001'], view: 'accepted' as const };
+  const paragraphs = await env.clients.read.readParagraphs(request);
+  expect(paragraphs).toEqual(env.session.readParagraphs(request));
+  if (!paragraphs.ok) throw new Error('read refused');
+  expect(paragraphs.paragraphs[0]!.atoms).toEqual(atoms);
+  const stories = await env.clients.read.readStories({ stories: ['body'], view: 'accepted' });
+  expect(stories).toMatchObject({
+    ok: true,
+    stories: [{ story: 'body', paragraphs: expect.arrayContaining([expect.objectContaining({ paraId: '0000B001', atoms })]) }],
+  });
 });
 
 for (const route of ['main', 'worker'] as const) {
